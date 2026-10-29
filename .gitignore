@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+data/
+.env
+# Oikea Caddyfile pidetään repon ulkopuolella; käytä Caddyfile.example-pohjaa.
+Caddyfile

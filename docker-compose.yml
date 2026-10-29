@@ -1,0 +1,15 @@
+services:
+  kirjapaivakirja:
+    build: .
+    container_name: kirjapaivakirja
+    restart: unless-stopped
+    ports:
+      # Sovellus luottaa Authelian headereihin: rajaa portti palomuurilla
+      # vain Caddyn osoitteesta tai sido se tiettyyn osoitteeseen (BIND_ADDR).
+      - "${BIND_ADDR:-0.0.0.0}:8097:8097"
+    environment:
+      DB_PATH: /app/data/kirjapaivakirja.db
+      AUTH_EMAIL_HEADER: Remote-Email
+      AUTH_NAME_HEADER: Remote-Name
+    volumes:
+      - ./data:/app/data

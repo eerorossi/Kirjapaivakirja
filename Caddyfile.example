@@ -1,0 +1,21 @@
+# Esimerkki: Kirjapäiväkirjan lohko olemassa olevaan Caddyfileen.
+# Oletus: (authelia)-snippet on määritelty kuten liikuntapaivakirja-repossa:
+#
+# (authelia) {
+#     forward_auth <AUTHELIA_HOST>:9091 {
+#         uri /authelia/api/verify?rd=https://<DOMAIN>/authelia/
+#         copy_headers Remote-User Remote-Groups Remote-Email Remote-Name
+#     }
+# }
+
+# forward_auth ajetaan ulommassa handle-lohkossa, jotta Authelia näkee
+# alkuperäisen polun (/kp/...) eikä prefiksin poiston jälkeistä polkua.
+handle /kp* {
+    import authelia
+    handle_path /kp* {
+        reverse_proxy <APP_HOST>:8097 {
+            header_up X-Forwarded-Prefix /kp
+        }
+    }
+    encode gzip
+}
