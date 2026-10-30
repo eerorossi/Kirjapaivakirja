@@ -9,11 +9,12 @@ from datetime import date
 from typing import Literal, Optional
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from auth import get_current_user
+from paths import base_href
 from providers import ProviderError
 from service import BookService, build_default_service
 from store import Store
@@ -322,8 +323,14 @@ def create_app(
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
     @app.get("/", include_in_schema=False)
-    def index() -> FileResponse:
-        return FileResponse(os.path.join(STATIC_DIR, "index.html"))
+    def index(request: Request) -> HTMLResponse:
+        # <base href> saa sovelluksen suhteelliset polut (api/..., static/...) toimimaan
+        # myös polkuprefiksin (/kp) takana, vaikka sivu avattaisiin ilman loppukauttaviivaa.
+        with open(os.path.join(STATIC_DIR, "index.html"), encoding="utf-8") as handle:
+            html = handle.read()
+        href = base_href(request.headers.get("x-forwarded-prefix"))
+        html = html.replace("<!--BASE-->", f'<base href="{href}">')
+        return HTMLResponse(html, headers={"Cache-Control": "no-cache"})
 
     return app
 

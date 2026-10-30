@@ -10,8 +10,8 @@ Toteutusvaiheet:
 
 0. Pohja ja dokumentaatio (valmis)
 1. Tietokanta ja kirjaukset (S2–S5) (valmis)
-2. Kirjahaku ja kirjan tiedot (S1, S11, S12) (toteutettu; aja savutesti, ks. alla)
-3. Käyttöliittymä (omat kirjaukset)
+2. Kirjahaku ja kirjan tiedot (S1, S11, S12) (valmis)
+3. Käyttöliittymä: haku, uusi kirjaus, omat kirjaukset, muokkaus ja poisto (toteutettu)
 4. Sosiaaliset ominaisuudet (So1–So5)
 5. Käyttöönotto (Docker, Caddy, varmuuskopiot)
 
@@ -30,6 +30,17 @@ curl -H "Remote-Email: testi@example.com" -H "Remote-Name: Testi" http://localho
 ```
 
 Testit: `pytest`
+
+## Käyttöliittymä
+
+Mobiili ensin: yksi sarake, alapalkki (Kirjaukset / Lisää kirja), 44–48 px kosketusalueet, vaalea ja tumma teema selaimen asetuksen mukaan. Ei build-vaihetta: `static/app.js` on pelkkää ES-moduulia.
+
+- `#/` omat kirjaukset, lajittelu uusin / kirjan nimi / kirjailija (valinta muistetaan selaimessa)
+- `#/new` haku (omat tallennetut kirjat + Finna/Open Library) tai kirjan lisäys käsin
+- `#/new/<kirja>` uusi kirjaus: lukupäivä, arvio 1–5 (valinnainen), muistiinpano
+- `#/entry/<id>` kirjauksen katselu, oma kirjaus muokattavissa ja poistettavissa
+
+Sovellus toimii myös alipolun alla (esim. `/kp`): palvelin lisää sivulle `<base href>`-tagin `X-Forwarded-Prefix`-headerista, ja kaikki osoitteet ovat suhteellisia. Caddyssä kannattaa lisätä `redir /kp /kp/`, jotta osoite ilman loppukauttaviivaa ohjautuu oikein.
 
 ## API
 

@@ -34,3 +34,16 @@ def test_index_served(client):
     r = client.get("/")
     assert r.status_code == 200
     assert "Kirjapäiväkirja" in r.text
+    assert '<base href="/">' in r.text
+    assert "<!--BASE-->" not in r.text
+
+
+def test_index_base_follows_forwarded_prefix(client):
+    r = client.get("/", headers={"X-Forwarded-Prefix": "/kp"})
+    assert '<base href="/kp/">' in r.text
+
+
+def test_index_ignores_malicious_prefix(client):
+    r = client.get("/", headers={"X-Forwarded-Prefix": '/x"><script>alert(1)</script>'})
+    assert "<script>alert(1)" not in r.text
+    assert '<base href="/">' in r.text

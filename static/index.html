@@ -2,22 +2,32 @@
 <html lang="fi">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <!--BASE-->
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="light dark">
+  <meta name="theme-color" content="#EEF1F4" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#12161C" media="(prefers-color-scheme: dark)">
   <title>Kirjapäiväkirja</title>
-  <style>
-    body { font-family: system-ui, sans-serif; margin: 0; padding: 1rem; max-width: 40rem; margin-inline: auto; }
-    h1 { font-size: 1.4rem; }
-  </style>
+  <link rel="stylesheet" href="static/style.css">
 </head>
 <body>
-  <h1>Kirjapäiväkirja</h1>
-  <p id="greeting">Ladataan…</p>
-  <script>
-    // Suhteelliset polut toimivat myös Caddyn polkuprefiksin (/kp) takana.
-    fetch("api/me")
-      .then(r => r.ok ? r.json() : Promise.reject(r.status))
-      .then(me => { document.getElementById("greeting").textContent = "Hei, " + me.display_name + "!"; })
-      .catch(() => { document.getElementById("greeting").textContent = "Kirjautuminen epäonnistui."; });
-  </script>
+  <header class="topbar">
+    <a class="brand" href="#/">Kirjapäiväkirja</a>
+    <span class="whoami" id="whoami"></span>
+  </header>
+
+  <main id="app" class="app">
+    <p class="status">Ladataan…</p>
+    <noscript><p class="status">Kirjapäiväkirja tarvitsee JavaScriptin toimiakseen.</p></noscript>
+  </main>
+
+  <nav class="tabbar" aria-label="Päävalikko">
+    <a class="tab" id="nav-list" href="#/">Kirjaukset</a>
+    <a class="tab tab-add" id="nav-new" href="#/new">Lisää kirja</a>
+  </nav>
+
+  <div class="toast" id="toast" hidden></div>
+
+  <script type="module" src="static/app.js"></script>
 </body>
 </html>
