@@ -9,6 +9,7 @@ from . import (
     UNKNOWN_AUTHOR,
     BookResult,
     get_json,
+    looks_finnish,
     normalize_author,
     parse_year,
     pick_isbn,
@@ -55,6 +56,9 @@ class FinnaProvider:
         summary = rec.get("summary")
         if isinstance(summary, list):
             summary = "\n\n".join(str(s).strip() for s in summary if str(s).strip())
+        summary = str(summary or "").strip()
+        if not looks_finnish(summary):
+            summary = ""  # kuvauksen pitää olla suomeksi
         return BookResult(
             source=self.name,
             source_id=str(record_id),
@@ -62,7 +66,7 @@ class FinnaProvider:
             author=self._author(rec.get("nonPresenterAuthors")),
             year=parse_year(rec.get("year")),
             isbn=pick_isbn(rec.get("isbns")),
-            summary=str(summary or "").strip(),
+            summary=summary,
             cover_url=self._cover(rec.get("images")),
         )
 

@@ -49,6 +49,30 @@ class BookProvider(Protocol):
     def get(self, source_id: str) -> BookResult | None: ...
 
 
+_FI_WORDS = frozenset(
+    "ja on ei että oli se hän kun mutta kuin joka jotka sekä tai ovat myös kirja "
+    "tämä sen jonka hänen sai olla ole kuvaa kertoo mukaan vuonna ovat sillä".split()
+)
+_SV_WORDS = frozenset(
+    "och som är det att en ett med för av på har den till inte om men var eller "
+    "han hon sig från vid också boken berättar".split()
+)
+_EN_WORDS = frozenset(
+    "the and of is in to a that with for are was by this his her from who as it".split()
+)
+
+
+def looks_finnish(text: str) -> bool:
+    """Karkea kielitunnistus: suomen yleisiä sanoja enemmän kuin ruotsin tai englannin.
+
+    Finna ei suodata kuvauksia kielen mukaan, ja sama tietue voi sisältää esim.
+    ruotsinkielisen kuvauksen. Epävarma (ei yhtään tunnistettua sanaa) hylätään."""
+    words = re.findall(r"[a-zåäö]+", text.casefold())
+    fi = sum(w in _FI_WORDS for w in words)
+    other = max(sum(w in _SV_WORDS for w in words), sum(w in _EN_WORDS for w in words))
+    return fi > other
+
+
 def make_http_client() -> httpx.Client:
     """Yhteinen HTTP-asiakas: tunnistettava User-Agent, lyhyet aikakatkaisut.
 

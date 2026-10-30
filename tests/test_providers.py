@@ -2,7 +2,7 @@
 import httpx
 import pytest
 
-from providers import ProviderError, normalize_author, parse_year, pick_isbn
+from providers import ProviderError, looks_finnish, normalize_author, parse_year, pick_isbn
 from providers.covers import MAX_COVER_BYTES, fetch_cover
 from providers.finna import FinnaProvider
 from providers.openlibrary import OpenLibraryProvider
@@ -66,7 +66,7 @@ FINNA_RECORD = {
         {"name": "Linna, Väinö", "role": "kirjoittaja"},
     ],
     "year": "1954",
-    "summary": ["Sotaromaani.", "Toinen kappale."],
+    "summary": ["Sotaromaani on kirja jatkosodasta.", "Toinen kappale ja loppu."],
     "isbns": ["9510000000", "9789510000001"],
     "images": ["/Cover/Show?id=fikka.1&index=0"],
 }
@@ -91,7 +91,7 @@ def test_finna_search_parses_records():
     assert r.author == "Väinö Linna"
     assert r.year == 1954
     assert r.isbn == "9789510000001"
-    assert r.summary == "Sotaromaani.\n\nToinen kappale."
+    assert r.summary == "Sotaromaani on kirja jatkosodasta.\n\nToinen kappale ja loppu."
     assert r.cover_url == "https://api.finna.fi/Cover/Show?id=fikka.1&index=0&size=large"
 
 
@@ -409,14 +409,17 @@ def test_merge_keeps_position_but_prefers_richest_record():
 
 def test_fetch_borrows_summary_and_cover_from_sibling_records():
     bare = result("finna", "f1", "Tuntematon sotilas", "Väinö Linna")
-    with_summary = result("finna", "f2", "Tuntematon sotilas /", "Väinö Linna", summary="Jatkosodan romaani.")
+    with_summary = result("finna", "f2", "Tuntematon sotilas /", "Väinö Linna", summary="Jatkosodan romaani on suomalainen klassikko.")
     with_cover = result("finna", "f3", "Tuntematon sotilas", "Väinö Linna", cover_url=FINNA_COVER, isbn="978-951-0")
     other_author = result("finna", "f4", "Tuntematon sotilas", "Joku Muu", summary="Väärä kirja.")
     service = BookService([Fake("finna", [with_summary, with_cover, other_author], details={"f1": bare})])
     r = service.fetch("finna", "f1")
-    assert r.summary == "Jatkosodan romaani."
+    assert r.summary == "Jatkosodan romaani on suomalainen klassikko."
     assert r.cover_url == FINNA_COVER
-    assert r.extra_cover_urls == ["https://covers.openlibrary.org/b/isbn/9789510-L.jpg?default=false"]
+    assert r.extra_cover_urls == [
+        "https://api.finna.fi/Cover/Show?isbn=9789510&size=large",
+        "https://covers.openlibrary.org/b/isbn/9789510-L.jpg?default=false",
+    ]
     assert "extra_cover_urls" not in r.to_dict()
 
 
@@ -446,3 +449,15 @@ def test_download_cover_tries_candidates_in_order():
     assert BookService([], http=client(handler)).download_cover(r) == (JPEG, "jpg")
     r.extra_cover_urls = []
     assert BookService([], http=client(handler)).download_cover(r) is None
+
+
+def test_looks_finnish():
+    assert looks_finnish("Romaani kertoo jatkosodasta ja sotilaista, jotka ovat tavallisia miehiä.")
+    assert not looks_finnish("Romanen handlar om kriget och soldaterna som är vanliga män.")
+    assert not looks_finnish("The novel is about the war and the soldiers who are ordinary men.")
+    assert not looks_finnish("")
+
+
+def test_finna_drops_non_finnish_summary():
+    rec = {"id": "x.1", "title": "Kirja", "summary": ["Romanen handlar om kriget och soldaterna som är vanliga män."]}
+    assert FinnaProvider(client(no_requests))._parse(rec).summary == ""

@@ -13,7 +13,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from providers import ProviderError  # noqa: E402
+from providers import ProviderError, looks_finnish  # noqa: E402
 from service import build_default_service  # noqa: E402
 from store import Store  # noqa: E402
 
@@ -26,7 +26,8 @@ def main() -> int:
         for book in store.list_books(limit=100000):
             if not service.has_source(book["source"] or ""):
                 continue  # käsin lisätty kirja
-            missing_summary = not book["summary"]
+            wrong_language = book["source"] == "finna" and bool(book["summary"]) and not looks_finnish(book["summary"])
+            missing_summary = not book["summary"] or wrong_language
             missing_cover = not book["cover_path"]
             if not (missing_summary or missing_cover):
                 continue
@@ -43,6 +44,9 @@ def main() -> int:
             if missing_summary and result.summary:
                 store.set_summary(book["id"], result.summary)
                 done.append("kuvaus")
+            elif wrong_language:
+                store.set_summary(book["id"], "")  # ei suomenkielistä kuvausta saatavilla
+                done.append("ei-suomenkielinen kuvaus poistettu")
             if missing_cover:
                 cover = service.download_cover(result)
                 if cover:

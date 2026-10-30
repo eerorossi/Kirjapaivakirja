@@ -10,7 +10,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 from providers import UNKNOWN_AUTHOR, BookResult, make_http_client
 from providers.covers import fetch_cover
-from providers.finna import FinnaProvider
+from providers.finna import FINNA_BASE, FinnaProvider
 from providers.openlibrary import COVERS_BASE, OpenLibraryProvider
 from providers.wikipedia import WikipediaBios
 
@@ -18,8 +18,8 @@ log = logging.getLogger(__name__)
 
 MAX_SUMMARY_CHARS = 4000
 MAX_BIO_CHARS = 3000
-SIBLING_SEARCH_LIMIT = 20
-MAX_COVER_ATTEMPTS = 5
+SIBLING_SEARCH_LIMIT = 50
+MAX_COVER_ATTEMPTS = 10
 
 
 def _norm(text: str) -> str:
@@ -149,7 +149,9 @@ class BookService:
             clean = re.sub(r"[^0-9Xx]", "", isbn or "")
             if clean and clean not in isbns:
                 isbns.append(clean)
-        urls += [f"{COVERS_BASE}/b/isbn/{i}-L.jpg?default=false" for i in isbns[:3]]
+        for isbn in isbns[:3]:  # ISBN-haku: Finnan oma kansipalvelu, sitten Open Library
+            urls.append(f"{FINNA_BASE}/Cover/Show?isbn={isbn}&size=large")
+            urls.append(f"{COVERS_BASE}/b/isbn/{isbn}-L.jpg?default=false")
         unique = list(dict.fromkeys(urls))
         result.cover_url = unique[0] if unique else None
         result.extra_cover_urls = unique[1:]
