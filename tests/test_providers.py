@@ -395,3 +395,54 @@ def test_fetch_truncates_long_texts():
     long = result("finna", "f1", summary="a" * 10000, author_bio="b" * 10000, author_bio_source="https://x")
     r = BookService([Fake("finna", details={"f1": long})]).fetch("finna", "f1")
     assert len(r.summary) == 4000 and len(r.author_bio) == 3000
+
+
+# --- täydennys saman teoksen muista tietueista ------------------------------------
+
+def test_merge_keeps_position_but_prefers_richest_record():
+    bare = result("finna", "f1", "Tuntematon sotilas", "Väinö Linna")
+    rich = result("finna", "f2", "Tuntematon sotilas", "Väinö Linna", summary="Sota.", cover_url=FINNA_COVER)
+    other = result("finna", "f3", "Edvin Laine", "Toinen")
+    found = BookService([Fake("finna", [bare, other, rich])]).search("x")["results"]
+    assert [r.source_id for r in found] == ["f2", "f3"]
+
+
+def test_fetch_borrows_summary_and_cover_from_sibling_records():
+    bare = result("finna", "f1", "Tuntematon sotilas", "Väinö Linna")
+    with_summary = result("finna", "f2", "Tuntematon sotilas /", "Väinö Linna", summary="Jatkosodan romaani.")
+    with_cover = result("finna", "f3", "Tuntematon sotilas", "Väinö Linna", cover_url=FINNA_COVER, isbn="978-951-0")
+    other_author = result("finna", "f4", "Tuntematon sotilas", "Joku Muu", summary="Väärä kirja.")
+    service = BookService([Fake("finna", [with_summary, with_cover, other_author], details={"f1": bare})])
+    r = service.fetch("finna", "f1")
+    assert r.summary == "Jatkosodan romaani."
+    assert r.cover_url == FINNA_COVER
+    assert r.extra_cover_urls == ["https://covers.openlibrary.org/b/isbn/9789510-L.jpg?default=false"]
+    assert "extra_cover_urls" not in r.to_dict()
+
+
+def test_fetch_skips_sibling_lookup_when_complete_or_author_unknown():
+    full = result("finna", "f1", summary="x", cover_url=FINNA_COVER)
+    finna = Fake("finna", details={"f1": full, "f2": result("finna", "f2", author="Tuntematon kirjailija")})
+    service = BookService([finna])
+    service.fetch("finna", "f1")
+    service.fetch("finna", "f2")
+    assert finna.search_calls == 0
+
+
+def test_fetch_survives_failing_sibling_lookup():
+    finna = Fake("finna", fail=True, details={"f1": result("finna", "f1")})
+    r = BookService([finna]).fetch("finna", "f1")
+    assert r.summary == "" and r.cover_url is None
+
+
+def test_download_cover_tries_candidates_in_order():
+    def handler(request):
+        if "first" in str(request.url):
+            return httpx.Response(404)
+        return httpx.Response(200, content=JPEG)
+
+    r = result("finna", "f1", cover_url="https://api.finna.fi/first.jpg",
+               extra_cover_urls=["https://api.finna.fi/second.jpg"])
+    assert BookService([], http=client(handler)).download_cover(r) == (JPEG, "jpg")
+    r.extra_cover_urls = []
+    assert BookService([], http=client(handler)).download_cover(r) is None

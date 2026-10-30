@@ -237,6 +237,10 @@ class Store:
                 "UPDATE books SET cover_path = ? WHERE id = ?", (cover_path, book_id)
             )
 
+    def set_summary(self, book_id: int, summary: str) -> None:
+        with self._session() as conn:
+            conn.execute("UPDATE books SET summary = ? WHERE id = ?", (summary, book_id))
+
     def list_books(self, q: str | None = None, limit: int = 50) -> list[dict]:
         """Hae omasta tietokannasta nimen tai kirjailijan osalla (ei ulkoista hakua)."""
         query = "SELECT * FROM books"

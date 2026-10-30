@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 import re
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from typing import Any, Protocol
 
 import httpx
@@ -31,9 +31,14 @@ class BookResult:
     cover_url: str | None = None
     author_bio: str = ""
     author_bio_source: str | None = None  # URL, josta esittely on peräisin
+    # Varakansikuvat (tuonnissa kokeillaan järjestyksessä, jos cover_url ei toimi).
+    # Vain palvelimen sisäiseen käyttöön: ei mene hakuvastaukseen.
+    extra_cover_urls: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict:
-        return asdict(self)
+        data = asdict(self)
+        data.pop("extra_cover_urls", None)
+        return data
 
 
 class BookProvider(Protocol):
