@@ -22,7 +22,14 @@ def test_me_without_header_is_401(client):
 
 
 def test_me_creates_user_from_headers(client):
-    r = client.get("/api/me", headers={"Remote-Email": "testi@example.com", "Remote-Name": "Testi Käyttäjä"})
+    # Authelia lähettää nimen UTF-8-tavuina; httpx koodaisi str-arvon ASCII:ksi.
+    r = client.get(
+        "/api/me",
+        headers=[
+            (b"remote-email", b"testi@example.com"),
+            (b"remote-name", "Testi Käyttäjä".encode("utf-8")),
+        ],
+    )
     assert r.status_code == 200
     body = r.json()
     assert body["email"] == "testi@example.com"
