@@ -23,6 +23,7 @@ CREATE TABLE IF NOT EXISTS books (
     isbn TEXT,
     summary TEXT NOT NULL DEFAULT '',
     author_bio TEXT NOT NULL DEFAULT '',
+    author_bio_source TEXT,
     cover_path TEXT,
     created_by INTEGER REFERENCES users(id),
     created_at TEXT NOT NULL,
@@ -57,7 +58,8 @@ SORT_ORDERS = {
 
 _ENTRY_SELECT = (
     "SELECT entries.*, users.display_name AS user_name, "
-    "books.title AS book_title, books.author AS book_author, books.year AS book_year "
+    "books.title AS book_title, books.author AS book_author, books.year AS book_year, "
+    "(books.cover_path IS NOT NULL) AS book_has_cover "
     "FROM entries "
     "JOIN users ON users.id = entries.user_id "
     "JOIN books ON books.id = entries.book_id "
@@ -92,6 +94,7 @@ def _entry_dict(row: sqlite3.Row) -> dict:
             "title": row["book_title"],
             "author": row["book_author"],
             "year": row["book_year"],
+            "has_cover": bool(row["book_has_cover"]),
         },
     }
 
@@ -102,8 +105,17 @@ class Store:
         os.makedirs(os.path.dirname(os.path.abspath(self.db_path)), exist_ok=True)
         conn = self._connect()
         conn.executescript(SCHEMA)
+        self._migrate(conn)
         conn.commit()
         conn.close()
+
+    @staticmethod
+    def _migrate(conn: sqlite3.Connection) -> None:
+        """Lisää myöhemmin tulleet sarakkeet jo olemassa olevaan tietokantaan
+        (CREATE TABLE IF NOT EXISTS ei muuta vanhaa taulua)."""
+        columns = {row["name"] for row in conn.execute("PRAGMA table_info(books)")}
+        if "author_bio_source" not in columns:
+            conn.execute("ALTER TABLE books ADD COLUMN author_bio_source TEXT")
 
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.db_path)
@@ -183,6 +195,7 @@ class Store:
         isbn: str | None = None,
         summary: str = "",
         author_bio: str = "",
+        author_bio_source: str | None = None,
         source: str = "manual",
         source_id: str | None = None,
         cover_path: str | None = None,
@@ -191,11 +204,12 @@ class Store:
         with self._session() as conn:
             cursor = conn.execute(
                 "INSERT INTO books (source, source_id, title, author, year, isbn, "
-                "summary, author_bio, cover_path, created_by, created_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "summary, author_bio, author_bio_source, cover_path, created_by, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     source, source_id, title, author, year, isbn,
-                    summary, author_bio, cover_path, created_by, _now(),
+                    summary, author_bio, author_bio_source, cover_path,
+                    created_by, _now(),
                 ),
             )
             return self._get_book(conn, cursor.lastrowid)
@@ -208,6 +222,20 @@ class Store:
     def get_book(self, book_id: int) -> dict | None:
         with self._session() as conn:
             return self._get_book(conn, book_id)
+
+    def get_book_by_source(self, source: str, source_id: str) -> dict | None:
+        with self._session() as conn:
+            row = conn.execute(
+                "SELECT * FROM books WHERE source = ? AND source_id = ?",
+                (source, source_id),
+            ).fetchone()
+            return dict(row) if row else None
+
+    def set_cover_path(self, book_id: int, cover_path: str | None) -> None:
+        with self._session() as conn:
+            conn.execute(
+                "UPDATE books SET cover_path = ? WHERE id = ?", (cover_path, book_id)
+            )
 
     def list_books(self, q: str | None = None, limit: int = 50) -> list[dict]:
         """Hae omasta tietokannasta nimen tai kirjailijan osalla (ei ulkoista hakua)."""

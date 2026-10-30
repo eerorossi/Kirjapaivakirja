@@ -10,7 +10,7 @@ Toteutusvaiheet:
 
 0. Pohja ja dokumentaatio (valmis)
 1. Tietokanta ja kirjaukset (S2–S5) (valmis)
-2. Kirjahaku ja kirjan tiedot (S1, S11, S12)
+2. Kirjahaku ja kirjan tiedot (S1, S11, S12) (toteutettu; aja savutesti, ks. alla)
 3. Käyttöliittymä (omat kirjaukset)
 4. Sosiaaliset ominaisuudet (So1–So5)
 5. Käyttöönotto (Docker, Caddy, varmuuskopiot)
@@ -40,12 +40,34 @@ Kaikki reitit vaativat Authelian headerit (muuten 401). Interaktiivinen dokument
 | `GET /api/me` | Kirjautunut käyttäjä |
 | `GET /api/books?q=` | Hae omasta tietokannasta nimen tai kirjailijan osalla |
 | `POST /api/books` | Lisää kirja käsin (`title`, `author` pakollisia; `year`, `isbn`, `summary` valinnaisia) |
-| `GET /api/books/{id}` | Kirjan tiedot |
+| `GET /api/books/search?q=` | Haku ulkoisista lähteistä (Finna ensin, sitten Open Library). Palauttaa `results` ja `unavailable` (lähteet, jotka eivät vastanneet) |
+| `POST /api/books/import` | Tuo haettu kirja: `{"source": "finna", "source_id": "fikka.123"}`. Palvelin hakee tiedot, kirjailijaesittelyn ja kansikuvan itse. 201 uusi, 200 jos kirja oli jo tuotu |
+| `GET /api/books/{id}` | Kirjan tiedot (synopsi, kirjailijaesittely ja sen lähde, `has_cover`) |
+| `GET /api/books/{id}/cover` | Kansikuva (404 jos ei ole) |
 | `GET /api/entries?user_id=&book_id=&sort=` | Kirjaukset; `sort` = `newest` (oletus), `title` tai `author` |
 | `POST /api/entries` | Uusi kirjaus: `book_id`, `read_on` (YYYY-MM-DD), `note`, `rating` (1–5 tai tyhjä) |
 | `GET /api/entries/{id}` | Yksi kirjaus (kaikki käyttäjät näkevät kaikkien kirjaukset) |
 | `PUT /api/entries/{id}` | Muokkaa omaa kirjausta (muilta 403) |
 | `DELETE /api/entries/{id}` | Poista oma kirjaus (muilta 403); kirja poistuu, kun sen viimeinen kirjaus poistuu |
+
+## Kirjatietojen lähteet
+
+| Lähde | Käyttö |
+|---|---|
+| [Finna](https://api.finna.fi/v1?swagger) | Ensisijainen: suomalaiset kirjat, synopsi, kansikuva |
+| [Open Library](https://openlibrary.org/dev/docs/api/search) | Täydentävä haku, kansikuva ja kirjailijan esittely |
+| Wikipedia (fi, sitten en) | Kirjailijan esittely, jos lähde ei tarjoa sitä. Esittely hyväksytään vain, jos kuvaus viittaa kirjoittajaan (estää samannimisen henkilön). Teksti on CC BY-SA, joten lähdeosoite tallennetaan (`author_bio_source`) ja se pitää näyttää käyttöliittymässä |
+
+- Haku tehdään palvelimen kautta, tulokset ovat 10 minuutin välimuistissa, ja lähteet haetaan rinnakkain. Jos yksi lähde ei vastaa, muut näytetään.
+- Valittu kirja kopioidaan omaan tietokantaan ja kansikuva levylle (`COVERS_DIR`), joten ulkoisia palveluita ei kuormiteta selatessa.
+- Asiakas ei anna palvelimelle kansikuvan osoitetta: se johdetaan lähteen vastauksesta ja ladataan vain sallituilta palvelimilta (`api.finna.fi`, `covers.openlibrary.org`). Kuvan tyyppi tarkistetaan sisällöstä (jpeg/png/webp, enintään 3 MB).
+- Käsin lisäys (`POST /api/books`) on varakeino kirjoille, joita lähteistä ei löydy.
+
+**Savutesti oikeita rajapintoja vastaan.** Automaattitestit käyttävät kiinteitä vastauksia, joten ne eivät huomaa, jos palvelu muuttaa vastaustaan. Aja tämä käsin aina vaiheen jälkeen ja jos haku alkaa tuottaa outoja tuloksia:
+
+```
+python scripts/smoke_providers.py "Tuntematon sotilas"
+```
 
 ## Docker
 
@@ -64,3 +86,5 @@ Portti 8097 kuuntelee oletuksena kaikissa osoitteissa. Koska sovellus luottaa `R
 | `AUTH_NAME_HEADER`  | `Remote-Name`                   | Header, josta näyttönimi luetaan (fallback: `Remote-User`, sitten sähköpostin alkuosa)  |
 | `AUTH_USER_HEADER`  | `Remote-User`                   | Varanimi näyttönimelle                                                                  |
 | `BIND_ADDR`         | `0.0.0.0`                       | Vain docker-compose: osoite, johon portti 8097 sidotaan                                 |
+| `COVERS_DIR`        | `/app/data/covers`              | Kansikuvien tallennushakemisto (data-volumessa, otettava mukaan varmuuskopioon)         |
+| `HTTP_USER_AGENT`   | `Kirjapaivakirja/1.0 (+https://github.com/eerorossi/Kirjapaivakirja)` | User-Agent ulkoisille pyynnöille. Open Library ja Wikipedia pyytävät tunnistettavaa agenttia; älä laita siihen muiden käyttäjien tietoja |

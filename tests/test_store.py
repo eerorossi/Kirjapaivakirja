@@ -94,7 +94,12 @@ def test_entry_contains_user_and_book_info(store):
     u, b = _user(store), _book(store, year=1835)
     e = store.create_entry(u["id"], b["id"], "2026-01-01", "hyvä", 4)
     assert e["user_name"] == "Käyttäjä 1"
-    assert e["book"] == {"id": b["id"], "title": "Kalevala", "author": "Elias Lönnrot", "year": 1835}
+    assert e["book"] == {
+        "id": b["id"], "title": "Kalevala", "author": "Elias Lönnrot",
+        "year": 1835, "has_cover": False,
+    }
+    store.set_cover_path(b["id"], f"{b['id']}.jpg")
+    assert store.get_entry(e["id"])["book"]["has_cover"] is True
     assert (e["note"], e["rating"], e["read_on"]) == ("hyvä", 4, "2026-01-01")
 
 
@@ -122,3 +127,52 @@ def test_delete_entry_removes_orphan_book_only_when_last(store):
 
 def test_delete_missing_entry_is_noop(store):
     assert store.delete_entry(123) is None
+
+
+def test_get_book_by_source_and_unique_constraint(store):
+    b = _book(store, source="finna", source_id="fikka.1", author_bio_source="https://x.example")
+    assert store.get_book_by_source("finna", "fikka.1")["id"] == b["id"]
+    assert store.get_book_by_source("finna", "fikka.2") is None
+    assert store.get_book_by_source("openlibrary", "fikka.1") is None
+    with pytest.raises(sqlite3.IntegrityError):
+        _book(store, source="finna", source_id="fikka.1")
+    # Käsin lisätyillä (source_id NULL) ei ole uniikkiutta.
+    _book(store)
+    _book(store)
+
+
+def test_set_cover_path(store):
+    b = _book(store)
+    assert b["cover_path"] is None
+    store.set_cover_path(b["id"], f"{b['id']}.png")
+    assert store.get_book(b["id"])["cover_path"] == f"{b['id']}.png"
+    store.set_cover_path(b["id"], None)
+    assert store.get_book(b["id"])["cover_path"] is None
+
+
+def test_migration_adds_author_bio_source_to_old_database(tmp_path):
+    """Vaiheen 1 tietokanta (ilman author_bio_source-saraketta) päivittyy käynnistyksessä."""
+    from store import Store
+
+    path = str(tmp_path / "old.db")
+    conn = sqlite3.connect(path)
+    conn.executescript(
+        """
+        CREATE TABLE users (id INTEGER PRIMARY KEY AUTOINCREMENT, email TEXT NOT NULL UNIQUE,
+            display_name TEXT NOT NULL, created_at TEXT NOT NULL);
+        CREATE TABLE books (id INTEGER PRIMARY KEY AUTOINCREMENT, source TEXT NOT NULL DEFAULT 'manual',
+            source_id TEXT, title TEXT NOT NULL, author TEXT NOT NULL, year INTEGER, isbn TEXT,
+            summary TEXT NOT NULL DEFAULT '', author_bio TEXT NOT NULL DEFAULT '', cover_path TEXT,
+            created_by INTEGER REFERENCES users(id), created_at TEXT NOT NULL, UNIQUE(source, source_id));
+        INSERT INTO books (title, author, created_at) VALUES ('Vanha', 'Kirjoittaja', '2026-01-01');
+        """
+    )
+    conn.commit()
+    conn.close()
+
+    store = Store(path)
+    old = store.get_book(1)
+    assert old["title"] == "Vanha" and old["author_bio_source"] is None
+    new = store.create_book("Uusi", "X", author_bio_source="https://example.org")
+    assert new["author_bio_source"] == "https://example.org"
+    Store(path)  # toinen käynnistys ei kaadu (sarake on jo olemassa)
