@@ -1,22 +1,3 @@
-import os
-import sys
-
-import pytest
-from fastapi.testclient import TestClient
-
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
-from main import create_app  # noqa: E402
-from store import Store  # noqa: E402
-
-
-@pytest.fixture
-def client(tmp_path):
-    store = Store(str(tmp_path / "test.db"))
-    with TestClient(create_app(store)) as c:
-        yield c
-
-
 def test_me_without_header_is_401(client):
     assert client.get("/api/me").status_code == 401
 

@@ -9,7 +9,7 @@ Ks. [Vaatimusmäärittely.md](Vaatimusmäärittely.md).
 Toteutusvaiheet:
 
 0. Pohja ja dokumentaatio (valmis)
-1. Tietokanta ja kirjaukset (S2–S5)
+1. Tietokanta ja kirjaukset (S2–S5) (valmis)
 2. Kirjahaku ja kirjan tiedot (S1, S11, S12)
 3. Käyttöliittymä (omat kirjaukset)
 4. Sosiaaliset ominaisuudet (So1–So5)
@@ -30,6 +30,22 @@ curl -H "Remote-Email: testi@example.com" -H "Remote-Name: Testi" http://localho
 ```
 
 Testit: `pytest`
+
+## API
+
+Kaikki reitit vaativat Authelian headerit (muuten 401). Interaktiivinen dokumentaatio: `/docs`.
+
+| Reitti | Kuvaus |
+|---|---|
+| `GET /api/me` | Kirjautunut käyttäjä |
+| `GET /api/books?q=` | Hae omasta tietokannasta nimen tai kirjailijan osalla |
+| `POST /api/books` | Lisää kirja käsin (`title`, `author` pakollisia; `year`, `isbn`, `summary` valinnaisia) |
+| `GET /api/books/{id}` | Kirjan tiedot |
+| `GET /api/entries?user_id=&book_id=&sort=` | Kirjaukset; `sort` = `newest` (oletus), `title` tai `author` |
+| `POST /api/entries` | Uusi kirjaus: `book_id`, `read_on` (YYYY-MM-DD), `note`, `rating` (1–5 tai tyhjä) |
+| `GET /api/entries/{id}` | Yksi kirjaus (kaikki käyttäjät näkevät kaikkien kirjaukset) |
+| `PUT /api/entries/{id}` | Muokkaa omaa kirjausta (muilta 403) |
+| `DELETE /api/entries/{id}` | Poista oma kirjaus (muilta 403); kirja poistuu, kun sen viimeinen kirjaus poistuu |
 
 ## Docker
 
