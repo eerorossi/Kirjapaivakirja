@@ -1,0 +1,30 @@
+# Liitettävä lohko yhteiseen docker-compose.yml:ään (services:-avaimen alle).
+# Säädä `build`-polku niin, että se osoittaa tämän repon kloonattuun hakemistoon
+# (tai käytä omaa image-nimeä, jos rakennat kuvan muualla).
+#
+# Tiedot (SQLite-tietokanta ja kansikuvat) ovat volumes/kirjapaivakirja/data-hakemistossa.
+# Hakemisto luodaan ja tyhjä tietokanta alustetaan ensimmäisellä käynnistyksellä.
+#
+# Sovellus luottaa Authelian headereihin (Remote-Email, Remote-Name): sido portti vain
+# Caddyn osoitteeseen (BIND_ADDR) tai rajaa palomuurilla, tai jätä `ports` pois ja
+# anna Caddyn tavoittaa kontti Docker-verkossa nimellä kirjapaivakirja:8097.
+
+  kirjapaivakirja:
+    build: ./BuildKirjapaivakirja
+    container_name: kirjapaivakirja
+    restart: unless-stopped
+    init: true
+    ports:
+      - "${BIND_ADDR:-0.0.0.0}:8097:8097"
+    environment:
+      DB_PATH: /app/data/kirjapaivakirja.db
+      COVERS_DIR: /app/data/covers
+      AUTH_EMAIL_HEADER: Remote-Email
+      AUTH_NAME_HEADER: Remote-Name
+    volumes:
+      - ./volumes/kirjapaivakirja/data:/app/data
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

@@ -13,7 +13,7 @@ Toteutusvaiheet:
 2. Kirjahaku ja kirjan tiedot (S1, S11, S12) (valmis)
 3. Käyttöliittymä: haku, uusi kirjaus, omat kirjaukset, muokkaus ja poisto (toteutettu)
 4. Sosiaaliset ominaisuudet: syöte, peukutukset, kommentit (So1–So5) (toteutettu)
-5. Käyttöönotto: Docker, Caddy, terveystarkistus, varmuuskopiot (toteutettu)
+5. Käyttöönotto: Docker, Caddy, terveystarkistus (toteutettu; varmuuskopiot hoidetaan koko koneen varmistuksella)
 
 ## Kehitys lokaalisti
 
@@ -94,50 +94,30 @@ python scripts/smoke_providers.py "Tuntematon sotilas"
 
 ### Docker
 
+Palvelun määrittely on liitettävänä lohkona tiedostossa `docker-compose.snippet.yml`: kopioi se yhteisen `docker-compose.yml`:n `services:`-avaimen alle ja säädä `build`-polku. Tiedot tallentuvat hakemistoon `./volumes/kirjapaivakirja/data` (tietokanta ja `covers/`). Hakemisto ja tyhjä tietokanta luodaan ensimmäisellä käynnistyksellä.
+
 ```
-docker compose up -d --build
+docker compose up -d --build kirjapaivakirja
 docker compose ps        # STATUS näyttää "healthy", kun sovellus vastaa
 ```
 
-Kontilla on terveystarkistus (`GET /healthz`, ei vaadi kirjautumista eikä paljasta dataa). Lokit pyörivät (3 × 10 Mt). Tiedot ovat hakemistossa `./data` (tietokanta, `covers/`, `backups/`).
+Kontilla on terveystarkistus (`GET /healthz`, ei vaadi kirjautumista eikä paljasta dataa). Lokit pyörivät (3 × 10 Mt).
 
-Portti 8097 kuuntelee oletuksena kaikissa osoitteissa. Koska sovellus luottaa `Remote-Email`-headeriin, rajaa portti vain Caddylle: aseta `BIND_ADDR` Pin LAN-osoitteeksi tai käytä palomuuria. Muuten Authelian voi ohittaa kutsumalla porttia suoraan.
+Portti 8097 kuuntelee oletuksena kaikissa osoitteissa. Koska sovellus luottaa `Remote-Email`-headeriin, rajaa portti vain Caddylle: aseta `BIND_ADDR` Pin LAN-osoitteeksi, käytä palomuuria tai jätä `ports` pois ja anna Caddyn tavoittaa kontti Docker-verkossa. Muuten Authelian voi ohittaa kutsumalla porttia suoraan.
 
 ### Caddy
 
-Toimiva lohko on tiedostossa `Caddyfile.example` (`redir /kp /kp/` + `handle_path /kp/*` + `forward_auth` + `X-Forwarded-Prefix`). `<APP_HOST>` on osoite, josta Caddy tavoittaa sovelluksen: Pin LAN-osoite tai kontin nimi, jos Caddy on samassa Docker-verkossa, ei `localhost`, jos Caddy on kontissa. Virhe 502 tarkoittaa lähes aina, ettei Caddy tavoita tätä osoitetta.
+Toimiva lohko on tiedostossa `Caddyfile.example` (`redir /kp /kp/` + `handle_path /kp/*` + `forward_auth` + `X-Forwarded-Prefix`). `<APP_HOST>` on osoite, josta Caddy tavoittaa sovelluksen: kontin nimi (`kirjapaivakirja`), jos Caddy on samassa Docker-verkossa, muuten Pin LAN-osoite (ei `localhost`, jos Caddy on kontissa). Virhe 502 tarkoittaa lähes aina, ettei Caddy tavoita tätä osoitetta.
 
 ### Varmuuskopiot
 
-`scripts/backup.py` pakkaa tietokannan (SQLiten backup-rajapinnalla, joten kopio on eheä käytön aikana) ja kansikuvat yhteen tiedostoon `data/backups/kirjapaivakirja-PVM-AIKA.tar.gz` ja säilyttää `BACKUP_KEEP` (oletus 14) uusinta.
-
-```
-docker compose exec -T kirjapaivakirja python scripts/backup.py backup
-```
-
-Ajasta yöllä crontabilla (`crontab -e`):
-
-```
-30 3 * * * /home/pi/docker/BuildKirjapaivakirja/scripts/backup-host.sh >> /home/pi/docker/BuildKirjapaivakirja/data/backup.log 2>&1
-```
-
-Sama SD-kortti ei suojaa kortin rikkoutumiselta, joten kopioi `data/backups/` myös toiselle koneelle tai levylle (rsync, rclone tai muu käyttämäsi tapa).
-
-**Palautus.** Pysäytä sovellus, palauta ja käynnistä:
-
-```
-docker compose stop
-docker compose run --rm kirjapaivakirja python scripts/backup.py restore /app/data/backups/kirjapaivakirja-20261031-033000.tar.gz
-docker compose start
-```
-
-Palautus tarkistaa arkiston (vain odotetut tiedostot, tietokannan eheys) ennen kuin koskee nykyiseen dataan, ja jättää vanhat tiedot talteen nimillä `kirjapaivakirja.db.before-restore` ja `covers.before-restore`. Kokeile palautus kerran ennen kuin tarvitset sitä.
+Sovellus ei tee omia varmuuskopioita. Kopioitavaa on vain hakemisto `volumes/kirjapaivakirja/data` (SQLite-tiedosto ja kansikuvat); jos kopioit sen käynnissä olevalta sovellukselta, pysäytä kontti ensin tai käytä `sqlite3 kirjapaivakirja.db ".backup ..."`, jotta tietokantatiedosto on eheä.
 
 ### Päivitys
 
 ```
 git pull
-docker compose up -d --build
+docker compose up -d --build kirjapaivakirja
 ```
 
 Tietokannan uudet sarakkeet ja taulut lisätään käynnistyksessä itsestään; tiedot säilyvät.
@@ -151,7 +131,5 @@ Tietokannan uudet sarakkeet ja taulut lisätään käynnistyksessä itsestään;
 | `AUTH_NAME_HEADER`  | `Remote-Name`                   | Header, josta näyttönimi luetaan (fallback: `Remote-User`, sitten sähköpostin alkuosa)  |
 | `AUTH_USER_HEADER`  | `Remote-User`                   | Varanimi näyttönimelle                                                                  |
 | `BIND_ADDR`         | `0.0.0.0`                       | Vain docker-compose: osoite, johon portti 8097 sidotaan                                 |
-| `COVERS_DIR`        | `/app/data/covers`              | Kansikuvien tallennushakemisto (data-volumessa, otettava mukaan varmuuskopioon)         |
-| `BACKUP_DIR`        | `/app/data/backups`             | Varmuuskopioiden hakemisto (`scripts/backup.py`)                                        |
-| `BACKUP_KEEP`       | `14`                            | Montako uusinta varmuuskopiota säilytetään                                              |
+| `COVERS_DIR`        | `/app/data/covers`              | Kansikuvien tallennushakemisto (data-volumessa)         |
 | `HTTP_USER_AGENT`   | `Kirjapaivakirja/1.0 (+https://github.com/eerorossi/Kirjapaivakirja)` | User-Agent ulkoisille pyynnöille. Open Library ja Wikipedia pyytävät tunnistettavaa agenttia; älä laita siihen muiden käyttäjien tietoja |
