@@ -186,3 +186,76 @@ def test_set_summary_stores_text_and_source(store):
     assert (updated["summary"], updated["summary_source"]) == ("Kuvaus.", "https://fi.wikipedia.org/wiki/X")
     store.set_summary(book["id"], "")
     assert store.get_book(book["id"])["summary_source"] is None
+
+
+# --- vaihe 4: peukutukset, kommentit, syöte -----------------------------------
+
+
+def _entry(store, user, book, read_on="2026-10-01", **kw):
+    return store.create_entry(user["id"], book["id"], read_on, **kw)
+
+
+def test_like_is_one_per_user_and_removable(store):
+    a, b, book = _user(store, 1), _user(store, 2), _book(store)
+    e = _entry(store, a, book)
+    store.add_like(e["id"], b["id"])
+    store.add_like(e["id"], b["id"])  # toinen peukutus ei tuplaa
+    store.add_like(e["id"], a["id"])
+    assert store.count_likes(e["id"]) == 2
+    assert [x["user_name"] for x in store.list_likers(e["id"])] == ["Käyttäjä 2", "Käyttäjä 1"]
+    store.remove_like(e["id"], b["id"])
+    store.remove_like(e["id"], b["id"])  # perutun voi perua uudelleen ilman virhettä
+    assert store.count_likes(e["id"]) == 1
+
+
+def test_entry_counts_and_liked_by_me(store):
+    a, b, book = _user(store, 1), _user(store, 2), _book(store)
+    e = _entry(store, a, book)
+    store.add_like(e["id"], b["id"])
+    store.add_comment(e["id"], b["id"], "Hyvä!")
+    mine = store.get_entry(e["id"], viewer_id=a["id"])
+    theirs = store.get_entry(e["id"], viewer_id=b["id"])
+    assert (mine["like_count"], mine["comment_count"], mine["liked_by_me"]) == (1, 1, False)
+    assert theirs["liked_by_me"] is True
+    assert store.get_entry(e["id"])["liked_by_me"] is False  # ilman katsojaa
+    listed = store.list_entries(user_id=a["id"], viewer_id=b["id"])
+    assert listed[0]["liked_by_me"] is True and listed[0]["comment_count"] == 1
+
+
+def test_comments_in_order_with_author_names(store):
+    a, b, book = _user(store, 1), _user(store, 2), _book(store)
+    e = _entry(store, a, book)
+    first = store.add_comment(e["id"], b["id"], "Ensin")
+    store.add_comment(e["id"], a["id"], "Sitten")
+    assert first["user_name"] == "Käyttäjä 2" and first["body"] == "Ensin"
+    assert [c["body"] for c in store.list_comments(e["id"])] == ["Ensin", "Sitten"]
+    store.delete_comment(first["id"])
+    assert store.get_comment(first["id"]) is None
+    assert [c["body"] for c in store.list_comments(e["id"])] == ["Sitten"]
+
+
+def test_deleting_entry_removes_its_likes_and_comments(store):
+    a, b, book = _user(store, 1), _user(store, 2), _book(store)
+    keep = _entry(store, a, book, "2026-10-02")
+    gone = _entry(store, a, book, "2026-10-01")
+    store.add_like(gone["id"], b["id"])
+    comment = store.add_comment(gone["id"], b["id"], "x")
+    store.add_like(keep["id"], b["id"])
+    store.delete_entry(gone["id"])
+    assert store.get_comment(comment["id"]) is None
+    assert store.count_likes(gone["id"]) == 0
+    assert store.count_likes(keep["id"]) == 1
+
+
+def test_feed_is_newest_logged_first_and_paginates(store):
+    a, b, book = _user(store, 1), _user(store, 2), _book(store)
+    ids = [_entry(store, u, book, "2026-01-01")["id"] for u in (a, b, a, b, a)]
+    store.add_like(ids[4], b["id"])
+    page1, nxt = store.list_feed(b["id"], limit=2)
+    assert [e["id"] for e in page1] == [ids[4], ids[3]]
+    assert page1[0]["liked_by_me"] is True and nxt == ids[3]
+    page2, nxt = store.list_feed(b["id"], before_id=nxt, limit=2)
+    assert [e["id"] for e in page2] == [ids[2], ids[1]] and nxt == ids[1]
+    page3, nxt = store.list_feed(b["id"], before_id=nxt, limit=2)
+    assert [e["id"] for e in page3] == [ids[0]] and nxt is None
+    assert store.list_feed(a["id"], limit=5)[1] is None  # kaikki mahtuvat: ei seuraavaa sivua

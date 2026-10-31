@@ -48,6 +48,10 @@ class EntryIn(BaseModel):
     rating: Optional[int] = Field(default=None, ge=1, le=5)
 
 
+class CommentIn(BaseModel):
+    body: str = Field(max_length=5000)
+
+
 class EntryUpdate(BaseModel):
     read_on: date
     note: str = Field(default="", max_length=20000)
@@ -84,6 +88,16 @@ def _remove_cover(covers_dir: str, book: dict) -> None:
             os.remove(path)
         except OSError as exc:
             log.warning("Could not remove cover %s: %s", path, exc)
+
+
+MAX_COMMENT_CHARS = 2000
+
+
+def _existing_entry(store: Store, entry_id: int) -> dict:
+    entry = store.get_entry(entry_id)
+    if entry is None:
+        raise HTTPException(status_code=404, detail="Entry not found")
+    return entry
 
 
 def _own_entry(store: Store, entry_id: int, user: dict) -> dict:
@@ -270,7 +284,18 @@ def create_app(
         user: dict = Depends(get_current_user),
         store: Store = Depends(get_store),
     ) -> list[dict]:
-        return store.list_entries(user_id=user_id, book_id=book_id, sort=sort)
+        return store.list_entries(user_id=user_id, book_id=book_id, sort=sort, viewer_id=user["id"])
+
+    @app.get("/api/feed")
+    def feed(
+        before: Optional[int] = None,
+        limit: int = Query(default=20, ge=1, le=50),
+        user: dict = Depends(get_current_user),
+        store: Store = Depends(get_store),
+    ) -> dict:
+        """Kaikkien kirjaukset uusimmin kirjattu ensin. Sivutus: `before` = edellisen vastauksen next_before."""
+        entries, next_before = store.list_feed(user["id"], before, limit)
+        return {"entries": entries, "next_before": next_before}
 
     @app.post("/api/entries", status_code=201)
     def create_entry(
@@ -291,10 +316,90 @@ def create_app(
         user: dict = Depends(get_current_user),
         store: Store = Depends(get_store),
     ) -> dict:
-        entry = store.get_entry(entry_id)
+        entry = store.get_entry(entry_id, viewer_id=user["id"])
         if entry is None:
             raise HTTPException(status_code=404, detail="Entry not found")
         return entry
+
+    # --- peukutukset ---------------------------------------------------
+
+    def _like_state(store: Store, entry_id: int, liked: bool) -> dict:
+        return {"liked": liked, "like_count": store.count_likes(entry_id)}
+
+    @app.put("/api/entries/{entry_id}/like")
+    def like_entry(
+        entry_id: int,
+        user: dict = Depends(get_current_user),
+        store: Store = Depends(get_store),
+    ) -> dict:
+        _existing_entry(store, entry_id)
+        store.add_like(entry_id, user["id"])  # idempotentti: toinen peukutus ei tee mitään
+        return _like_state(store, entry_id, True)
+
+    @app.delete("/api/entries/{entry_id}/like")
+    def unlike_entry(
+        entry_id: int,
+        user: dict = Depends(get_current_user),
+        store: Store = Depends(get_store),
+    ) -> dict:
+        _existing_entry(store, entry_id)
+        store.remove_like(entry_id, user["id"])
+        return _like_state(store, entry_id, False)
+
+    @app.get("/api/entries/{entry_id}/likes")
+    def entry_likes(
+        entry_id: int,
+        user: dict = Depends(get_current_user),
+        store: Store = Depends(get_store),
+    ) -> list[dict]:
+        """Kuka on peukuttanut: vain kirjauksen tekijälle (So4)."""
+        _own_entry(store, entry_id, user)
+        return store.list_likers(entry_id)
+
+    # --- kommentit -----------------------------------------------------
+
+    def _public_comment(comment: dict, entry: dict, user: dict) -> dict:
+        can_delete = user["id"] in (comment["user_id"], entry["user_id"])  # So5
+        return {**comment, "can_delete": can_delete}
+
+    @app.get("/api/entries/{entry_id}/comments")
+    def list_comments(
+        entry_id: int,
+        user: dict = Depends(get_current_user),
+        store: Store = Depends(get_store),
+    ) -> list[dict]:
+        entry = _existing_entry(store, entry_id)
+        return [_public_comment(c, entry, user) for c in store.list_comments(entry_id)]
+
+    @app.post("/api/entries/{entry_id}/comments", status_code=201)
+    def add_comment(
+        entry_id: int,
+        body: CommentIn,
+        user: dict = Depends(get_current_user),
+        store: Store = Depends(get_store),
+    ) -> dict:
+        entry = _existing_entry(store, entry_id)
+        text = body.body.strip()
+        if not text or len(text) > MAX_COMMENT_CHARS:
+            raise HTTPException(
+                status_code=422, detail=f"Comment must be 1-{MAX_COMMENT_CHARS} characters"
+            )
+        return _public_comment(store.add_comment(entry_id, user["id"], text), entry, user)
+
+    @app.delete("/api/comments/{comment_id}", status_code=204, response_class=Response)
+    def delete_comment(
+        comment_id: int,
+        user: dict = Depends(get_current_user),
+        store: Store = Depends(get_store),
+    ) -> Response:
+        comment = store.get_comment(comment_id)
+        if comment is None:
+            raise HTTPException(status_code=404, detail="Comment not found")
+        entry = _existing_entry(store, comment["entry_id"])
+        if user["id"] not in (comment["user_id"], entry["user_id"]):
+            raise HTTPException(status_code=403, detail="Not allowed to delete this comment")
+        store.delete_comment(comment_id)
+        return Response(status_code=204)
 
     @app.put("/api/entries/{entry_id}")
     def update_entry(

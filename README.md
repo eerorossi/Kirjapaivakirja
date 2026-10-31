@@ -12,7 +12,7 @@ Toteutusvaiheet:
 1. Tietokanta ja kirjaukset (S2–S5) (valmis)
 2. Kirjahaku ja kirjan tiedot (S1, S11, S12) (valmis)
 3. Käyttöliittymä: haku, uusi kirjaus, omat kirjaukset, muokkaus ja poisto (toteutettu)
-4. Sosiaaliset ominaisuudet (So1–So5)
+4. Sosiaaliset ominaisuudet: syöte, peukutukset, kommentit (So1–So5) (toteutettu)
 5. Käyttöönotto (Docker, Caddy, varmuuskopiot)
 
 ## Kehitys lokaalisti
@@ -33,12 +33,13 @@ Testit: `pytest`
 
 ## Käyttöliittymä
 
-Mobiili ensin: yksi sarake, alapalkki (Kirjaukset / Lisää kirja), 44–48 px kosketusalueet, vaalea ja tumma teema selaimen asetuksen mukaan. Ei build-vaihetta: `static/app.js` on pelkkää ES-moduulia.
+Mobiili ensin: yksi sarake, alapalkki (Syöte / Kirjaukset / Lisää kirja), 44–48 px kosketusalueet, vaalea ja tumma teema selaimen asetuksen mukaan. Ei build-vaihetta: `static/app.js` on pelkkää ES-moduulia.
 
+- `#/feed` syöte: kaikkien kirjaukset, uusimmin kirjattu ensin; peukutus ja kommentointi suoraan listasta, "Näytä lisää" sivuttaa
 - `#/` omat kirjaukset, lajittelu uusin / kirjan nimi / kirjailija (valinta muistetaan selaimessa)
 - `#/new` haku (omat tallennetut kirjat + Finna/Open Library) tai kirjan lisäys käsin
 - `#/new/<kirja>` uusi kirjaus: lukupäivä, arvio 1–5 (valinnainen), muistiinpano
-- `#/entry/<id>` kirjauksen katselu, oma kirjaus muokattavissa ja poistettavissa
+- `#/entry/<id>` kirjauksen katselu, kommentit ja peukutus; oma kirjaus muokattavissa ja poistettavissa. Kirjauksen tekijä näkee, ketkä ovat peukuttaneet; kommentin voi poistaa sen kirjoittaja tai kirjauksen tekijä
 
 Sovellus toimii myös alipolun alla (esim. `/kp`): palvelin lisää sivulle `<base href>`-tagin `X-Forwarded-Prefix`-headerista, ja kaikki osoitteet ovat suhteellisia. Caddyssä kannattaa lisätä `redir /kp /kp/`, jotta osoite ilman loppukauttaviivaa ohjautuu oikein.
 
@@ -54,6 +55,13 @@ Kaikki reitit vaativat Authelian headerit (muuten 401). Interaktiivinen dokument
 | `GET /api/books/search?q=` | Haku ulkoisista lähteistä (Finna ensin, sitten Open Library). Palauttaa `results` ja `unavailable` (lähteet, jotka eivät vastanneet) |
 | `POST /api/books/import` | Tuo haettu kirja: `{"source": "finna", "source_id": "fikka.123"}`. Palvelin hakee tiedot, kirjailijaesittelyn ja kansikuvan itse. 201 uusi, 200 jos kirja oli jo tuotu |
 | `GET /api/books/{id}` | Kirjan tiedot (synopsi, kirjailijaesittely ja sen lähde, `has_cover`) |
+| `GET /api/feed?before=&limit=` | Kaikkien kirjaukset, uusimmin kirjattu ensin. Vastaus `{entries, next_before}`; seuraava sivu antamalla `before=next_before` (limit 1–50, oletus 20) |
+| `PUT /api/entries/{id}/like` | Peukuta (idempotentti, yksi per käyttäjä). Vastaus `{liked, like_count}` |
+| `DELETE /api/entries/{id}/like` | Peru peukutus |
+| `GET /api/entries/{id}/likes` | Ketkä ovat peukuttaneet: vain kirjauksen tekijälle (muille 403) |
+| `GET /api/entries/{id}/comments` | Kirjauksen kommentit vanhin ensin; `can_delete` kertoo, saako katsoja poistaa |
+| `POST /api/entries/{id}/comments` | Lisää kommentti `{"body": "..."}` (1–2000 merkkiä) |
+| `DELETE /api/comments/{id}` | Poista kommentti: kirjoittaja tai kirjauksen tekijä, muille 403 |
 | `GET /api/books/{id}/cover` | Kansikuva (404 jos ei ole) |
 | `GET /api/entries?user_id=&book_id=&sort=` | Kirjaukset; `sort` = `newest` (oletus), `title` tai `author` |
 | `POST /api/entries` | Uusi kirjaus: `book_id`, `read_on` (YYYY-MM-DD), `note`, `rating` (1–5 tai tyhjä) |

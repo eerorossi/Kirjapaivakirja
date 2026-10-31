@@ -18,6 +18,7 @@ const SVG_NS = "http://www.w3.org/2000/svg";
 
 const appEl = document.getElementById("app");
 const toastEl = document.getElementById("toast");
+const navFeed = document.getElementById("nav-feed");
 const navList = document.getElementById("nav-list");
 const navNew = document.getElementById("nav-new");
 
@@ -47,6 +48,23 @@ function h(tag, props = {}, ...children) {
 function fmtDate(iso) {
   const [y, m, d] = String(iso).split("-").map(Number);
   return `${d}.${m}.${y}`;
+}
+
+function fmtDateTime(iso) {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  return d.toLocaleString("fi-FI", { day: "numeric", month: "numeric", year: "numeric", hour: "2-digit", minute: "2-digit" });
+}
+
+function plural(n, one, many) {
+  return `${n} ${n === 1 ? one : many}`;
+}
+
+function countText(entry) {
+  return [
+    entry.like_count ? plural(entry.like_count, "peukku", "peukkua") : null,
+    entry.comment_count ? plural(entry.comment_count, "kommentti", "kommenttia") : null,
+  ].filter(Boolean).join(" · ");
 }
 
 function today() {
@@ -289,17 +307,164 @@ function entryForm(initial, { submitLabel, busyLabel, onSubmit }) {
 
 // ---------- näkymät ----------
 
+function rowLink(entry, { counts = false } = {}) {
+  return h("a", { class: "row", href: `#/entry/${entry.id}` },
+    cover(entry.book),
+    h("div", { class: "row-body" },
+      h("p", { class: "book-title" }, entry.book.title),
+      h("p", { class: "book-author" }, entry.book.author),
+      h("div", { class: "row-meta" },
+        h("span", { class: "stamp" }, fmtDate(entry.read_on)),
+        entry.rating ? stars(entry.rating) : null),
+      entry.note ? h("p", { class: "note-clamp" }, entry.note) : null,
+      counts && countText(entry) ? h("p", { class: "row-counts" }, countText(entry)) : null));
+}
+
 function entryRow(entry) {
-  return h("li", {},
-    h("a", { class: "row", href: `#/entry/${entry.id}` },
-      cover(entry.book),
-      h("div", { class: "row-body" },
-        h("p", { class: "book-title" }, entry.book.title),
-        h("p", { class: "book-author" }, entry.book.author),
-        h("div", { class: "row-meta" },
-          h("span", { class: "stamp" }, fmtDate(entry.read_on)),
-          entry.rating ? stars(entry.rating) : null),
-        entry.note ? h("p", { class: "note-clamp" }, entry.note) : null)));
+  return h("li", {}, rowLink(entry, { counts: true }));
+}
+
+/** Peukutuspainike: päivittää kirjauksen tilan palvelimen vastauksella. */
+function likeButton(entry) {
+  const label = h("span", {});
+  const count = h("span", { class: "like-count" });
+  const button = h("button", { type: "button", class: "like-btn" }, label, count);
+  const paint = () => {
+    button.setAttribute("aria-pressed", String(entry.liked_by_me));
+    button.classList.toggle("like-on", entry.liked_by_me);
+    label.textContent = entry.liked_by_me ? "Peukutettu" : "Peukuta";
+    count.textContent = entry.like_count ? String(entry.like_count) : "";
+  };
+  button.addEventListener("click", async () => {
+    button.disabled = true;
+    try {
+      const state = await api(`api/entries/${entry.id}/like`, { method: entry.liked_by_me ? "DELETE" : "PUT" });
+      entry.liked_by_me = state.liked;
+      entry.like_count = state.like_count;
+      paint();
+    } catch (error) {
+      showError(error);
+    } finally {
+      button.disabled = false;
+    }
+  });
+  paint();
+  return button;
+}
+
+function feedRow(entry) {
+  const mine = entry.user_id === me.id;
+  return h("li", { class: "feed-item" },
+    h("p", { class: "row-user" }, mine ? "Sinä" : entry.user_name),
+    rowLink(entry),
+    h("div", { class: "social-bar" },
+      mine ? h("span", { class: "muted" }, countText(entry) || "Ei vielä peukkuja tai kommentteja") : likeButton(entry),
+      h("a", { class: "btn btn-quiet btn-small", href: `#/entry/${entry.id}` },
+        entry.comment_count ? `Kommentit (${entry.comment_count})` : "Kommentoi")));
+}
+
+async function renderFeed(_args, ctx) {
+  const first = await api("api/feed");
+  let next = first.next_before;
+  const list = h("ul", { class: "shelf" }, first.entries.map(feedRow));
+  const more = h("button", { type: "button", class: "btn btn-quiet more", hidden: next === null }, "Näytä lisää");
+  more.addEventListener("click", async () => {
+    more.disabled = true;
+    try {
+      const page = await api(`api/feed?before=${next}`);
+      list.append(...page.entries.map(feedRow));
+      next = page.next_before;
+      more.hidden = next === null;
+    } catch (error) {
+      showError(error);
+    } finally {
+      more.disabled = false;
+    }
+  });
+  const view = h("section", {},
+    h("h2", { class: "view-title", tabindex: "-1" }, "Syöte"),
+    first.entries.length
+      ? [h("p", { class: "count" }, "Kaikkien kirjaukset, uusimmat ensin"), list, more]
+      : h("div", { class: "empty" },
+          h("p", { class: "empty-title" }, "Syöte on vielä tyhjä"),
+          h("p", { class: "muted" }, "Kun joku kirjaa luetun kirjan, se näkyy täällä."),
+          h("a", { class: "btn btn-primary", href: "#/new" }, "Lisää kirja")));
+  ctx.mount(view, "Syöte");
+}
+
+/** Peukut ja kommentit kirjauksen sivulla. */
+function socialSection(entry, comments, likers) {
+  const mine = entry.user_id === me.id;
+  const title = h("h4", { class: "comments-title" });
+  const list = h("ul", { class: "comments" });
+  const paintTitle = () => { title.textContent = `Kommentit (${comments.length})`; };
+
+  const commentItem = (comment) => {
+    const item = h("li", { class: "comment" },
+      h("p", { class: "comment-head" },
+        h("strong", {}, comment.user_name), " ",
+        h("span", { class: "muted" }, fmtDateTime(comment.created_at))),
+      h("p", { class: "comment-body" }, comment.body));
+    if (comment.can_delete) {
+      const remove = h("button", {
+        type: "button",
+        class: "btn btn-quiet btn-small",
+        "aria-label": `Poista kommentti, kirjoittaja ${comment.user_name}`,
+      }, "Poista");
+      remove.addEventListener("click", async () => {
+        if (!confirm("Poistetaanko tämä kommentti?")) return;
+        remove.disabled = true;
+        try {
+          await api(`api/comments/${comment.id}`, { method: "DELETE" });
+          comments = comments.filter((c) => c.id !== comment.id);
+          item.remove();
+          paintTitle();
+        } catch (error) {
+          showError(error);
+          remove.disabled = false;
+        }
+      });
+      item.append(remove);
+    }
+    return item;
+  };
+  list.append(...comments.map(commentItem));
+  paintTitle();
+
+  const body = h("textarea", { id: "c-body", name: "body", maxlength: "2000", rows: "3", placeholder: "Kirjoita kommentti" });
+  const submit = h("button", { type: "submit", class: "btn btn-primary" }, "Lähetä kommentti");
+  const form = h("form", { class: "form comment-form" }, field("Oma kommentti", "c-body", body), submit);
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    if (!body.value.trim()) {
+      toast("Kirjoita ensin kommentti.", { error: true });
+      body.focus();
+      return;
+    }
+    submit.disabled = true;
+    submit.textContent = "Lähetetään…";
+    try {
+      const created = await api(`api/entries/${entry.id}/comments`, { method: "POST", body: { body: body.value } });
+      comments = [...comments, created];
+      list.append(commentItem(created));
+      paintTitle();
+      body.value = "";
+    } catch (error) {
+      showError(error);
+    } finally {
+      submit.disabled = false;
+      submit.textContent = "Lähetä kommentti";
+    }
+  });
+
+  return h("section", { class: "social" },
+    h("h3", { class: "form-title" }, "Peukut ja kommentit"),
+    mine
+      ? h("p", { class: "muted" }, likers.length
+          ? `Peukuttaneet: ${likers.map((l) => l.user_name).join(", ")}`
+          : "Kukaan ei ole vielä peukuttanut tätä kirjausta.")
+      : h("div", { class: "social-bar" }, likeButton(entry)),
+    title, list, form);
 }
 
 function sortControl(current) {
@@ -495,10 +660,16 @@ async function renderNewEntry([bookId], ctx) {
 
 async function renderEntry([id], ctx) {
   const entry = await api(`api/entries/${id}`);
-  const book = await api(`api/books/${entry.book.id}`);
   const mine = entry.user_id === me.id;
+  const [book, comments, likers] = await Promise.all([
+    api(`api/books/${entry.book.id}`),
+    api(`api/entries/${entry.id}/comments`),
+    mine ? api(`api/entries/${entry.id}/likes`).catch(() => []) : [],
+  ]);
   const parts = [
-    h("a", { class: "back", href: "#/" }, "Takaisin kirjauksiin"),
+    mine
+      ? h("a", { class: "back", href: "#/" }, "Takaisin kirjauksiin")
+      : h("a", { class: "back", href: "#/feed" }, "Takaisin syötteeseen"),
     bookHead(book),
     bookInfo(book),
   ];
@@ -525,14 +696,17 @@ async function renderEntry([id], ctx) {
         remove.disabled = false;
       }
     });
-    parts.push(h("h3", { class: "form-title" }, "Oma kirjaus"), form, h("div", { class: "actions" }, remove));
+    parts.push(
+      h("h3", { class: "form-title" }, "Oma kirjaus"), form, h("div", { class: "actions" }, remove),
+      socialSection(entry, comments, likers));
   } else {
     parts.push(
       h("h3", { class: "form-title" }, `Kirjaus: ${entry.user_name}`),
       h("div", { class: "row-meta" },
         h("span", { class: "stamp" }, fmtDate(entry.read_on)),
         entry.rating ? stars(entry.rating) : null),
-      entry.note ? h("p", { class: "note-full" }, entry.note) : null);
+      entry.note ? h("p", { class: "note-full" }, entry.note) : null,
+      socialSection(entry, comments, likers));
   }
   ctx.mount(h("section", {}, parts), book.title);
 }
@@ -541,6 +715,7 @@ async function renderEntry([id], ctx) {
 
 const ROUTES = [
   [/^#\/?$/, renderList],
+  [/^#\/feed$/, renderFeed],
   [/^#\/new$/, renderSearch],
   [/^#\/new\/(\d+)$/, renderNewEntry],
   [/^#\/entry\/(\d+)$/, renderEntry],
@@ -561,13 +736,15 @@ function makeContext(token) {
 }
 
 function markNav(hash) {
-  const adding = hash.startsWith("#/new");
-  navNew.classList.toggle("tab-on", adding);
-  navList.classList.toggle("tab-on", !adding);
-  navNew.toggleAttribute("aria-current", adding);
-  navList.toggleAttribute("aria-current", !adding);
-  if (adding) navNew.setAttribute("aria-current", "page");
-  else navList.setAttribute("aria-current", "page");
+  // Kirjauksen sivu perii sen välilehden, josta tultiin (syöte tai omat kirjaukset).
+  if (hash.startsWith("#/entry/") && document.querySelector(".tab-on")) return;
+  const active = hash.startsWith("#/new") ? navNew : hash === "#/feed" ? navFeed : navList;
+  for (const tab of [navFeed, navList, navNew]) {
+    const on = tab === active;
+    tab.classList.toggle("tab-on", on);
+    if (on) tab.setAttribute("aria-current", "page");
+    else tab.removeAttribute("aria-current");
+  }
 }
 
 function showProblem(error) {

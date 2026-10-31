@@ -44,6 +44,22 @@ CREATE TABLE IF NOT EXISTS entries (
 CREATE INDEX IF NOT EXISTS idx_entries_read_on ON entries(read_on);
 CREATE INDEX IF NOT EXISTS idx_entries_user ON entries(user_id);
 CREATE INDEX IF NOT EXISTS idx_entries_book ON entries(book_id);
+
+CREATE TABLE IF NOT EXISTS likes (
+    entry_id INTEGER NOT NULL REFERENCES entries(id) ON DELETE CASCADE,
+    user_id INTEGER NOT NULL REFERENCES users(id),
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (entry_id, user_id)
+);
+
+CREATE TABLE IF NOT EXISTS comments (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    entry_id INTEGER NOT NULL REFERENCES entries(id) ON DELETE CASCADE,
+    user_id INTEGER NOT NULL REFERENCES users(id),
+    body TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_comments_entry ON comments(entry_id, id);
 """
 
 # Sallitut lajittelut (S5). Kirjan nimi ja kirjailija lajitellaan
@@ -60,7 +76,9 @@ SORT_ORDERS = {
 _ENTRY_SELECT = (
     "SELECT entries.*, users.display_name AS user_name, "
     "books.title AS book_title, books.author AS book_author, books.year AS book_year, "
-    "(books.cover_path IS NOT NULL) AS book_has_cover "
+    "(books.cover_path IS NOT NULL) AS book_has_cover, "
+    "(SELECT COUNT(*) FROM likes WHERE likes.entry_id = entries.id) AS like_count, "
+    "(SELECT COUNT(*) FROM comments WHERE comments.entry_id = entries.id) AS comment_count "
     "FROM entries "
     "JOIN users ON users.id = entries.user_id "
     "JOIN books ON books.id = entries.book_id "
@@ -90,6 +108,9 @@ def _entry_dict(row: sqlite3.Row) -> dict:
         "rating": row["rating"],
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
+        "like_count": row["like_count"],
+        "comment_count": row["comment_count"],
+        "liked_by_me": False,  # täydennetään _mark_liked:llä, kun katsoja tunnetaan
         "book": {
             "id": row["book_id"],
             "title": row["book_title"],
@@ -98,6 +119,23 @@ def _entry_dict(row: sqlite3.Row) -> dict:
             "has_cover": bool(row["book_has_cover"]),
         },
     }
+
+
+def _mark_liked(conn: sqlite3.Connection, entries: list[dict], viewer_id: int | None) -> list[dict]:
+    """Merkitse, mitkä kirjauksista katsoja on peukuttanut (yksi kysely)."""
+    if viewer_id is None or not entries:
+        return entries
+    marks = ",".join("?" * len(entries))
+    liked = {
+        row["entry_id"]
+        for row in conn.execute(
+            f"SELECT entry_id FROM likes WHERE user_id = ? AND entry_id IN ({marks})",
+            [viewer_id, *(e["id"] for e in entries)],
+        )
+    }
+    for entry in entries:
+        entry["liked_by_me"] = entry["id"] in liked
+    return entries
 
 
 class Store:
@@ -269,6 +307,7 @@ class Store:
         user_id: int | None = None,
         book_id: int | None = None,
         sort: str = "newest",
+        viewer_id: int | None = None,
     ) -> list[dict]:
         if sort not in SORT_ORDERS:
             raise ValueError(f"Unknown sort: {sort}")
@@ -282,7 +321,27 @@ class Store:
             params.append(book_id)
         query += " ORDER BY " + SORT_ORDERS[sort]
         with self._session() as conn:
-            return [_entry_dict(r) for r in conn.execute(query, params).fetchall()]
+            entries = [_entry_dict(r) for r in conn.execute(query, params).fetchall()]
+            return _mark_liked(conn, entries, viewer_id)
+
+    def list_feed(
+        self, viewer_id: int, before_id: int | None = None, limit: int = 20
+    ) -> tuple[list[dict], int | None]:
+        """Kaikkien käyttäjien kirjaukset, uusimmin kirjattu ensin (So1).
+
+        Palauttaa (kirjaukset, next_before); next_before on None, kun lisää ei ole."""
+        query = _ENTRY_SELECT + "WHERE 1=1"
+        params: list = []
+        if before_id is not None:
+            query += " AND entries.id < ?"
+            params.append(before_id)
+        query += " ORDER BY entries.id DESC LIMIT ?"
+        params.append(limit + 1)
+        with self._session() as conn:
+            entries = [_entry_dict(r) for r in conn.execute(query, params).fetchall()]
+            more = len(entries) > limit
+            entries = _mark_liked(conn, entries[:limit], viewer_id)
+        return entries, (entries[-1]["id"] if more else None)
 
     @staticmethod
     def _get_entry(conn: sqlite3.Connection, entry_id: int) -> dict | None:
@@ -291,9 +350,81 @@ class Store:
         ).fetchone()
         return _entry_dict(row) if row else None
 
-    def get_entry(self, entry_id: int) -> dict | None:
+    def get_entry(self, entry_id: int, viewer_id: int | None = None) -> dict | None:
         with self._session() as conn:
-            return self._get_entry(conn, entry_id)
+            entry = self._get_entry(conn, entry_id)
+            if entry is not None:
+                _mark_liked(conn, [entry], viewer_id)
+            return entry
+
+    # --- peukutukset (So2, So4) ---------------------------------------
+
+    def add_like(self, entry_id: int, user_id: int) -> None:
+        with self._session() as conn:
+            conn.execute(
+                "INSERT OR IGNORE INTO likes (entry_id, user_id, created_at) VALUES (?, ?, ?)",
+                (entry_id, user_id, _now()),
+            )
+
+    def remove_like(self, entry_id: int, user_id: int) -> None:
+        with self._session() as conn:
+            conn.execute(
+                "DELETE FROM likes WHERE entry_id = ? AND user_id = ?", (entry_id, user_id)
+            )
+
+    def count_likes(self, entry_id: int) -> int:
+        with self._session() as conn:
+            return conn.execute(
+                "SELECT COUNT(*) FROM likes WHERE entry_id = ?", (entry_id,)
+            ).fetchone()[0]
+
+    def list_likers(self, entry_id: int) -> list[dict]:
+        with self._session() as conn:
+            rows = conn.execute(
+                "SELECT likes.user_id, users.display_name AS user_name, likes.created_at "
+                "FROM likes JOIN users ON users.id = likes.user_id "
+                "WHERE likes.entry_id = ? ORDER BY likes.created_at, likes.user_id",
+                (entry_id,),
+            ).fetchall()
+            return [dict(r) for r in rows]
+
+    # --- kommentit (So3, So5) -----------------------------------------
+
+    _COMMENT_SELECT = (
+        "SELECT comments.id, comments.entry_id, comments.user_id, comments.body, "
+        "comments.created_at, users.display_name AS user_name "
+        "FROM comments JOIN users ON users.id = comments.user_id "
+    )
+
+    def add_comment(self, entry_id: int, user_id: int, body: str) -> dict:
+        with self._session() as conn:
+            cursor = conn.execute(
+                "INSERT INTO comments (entry_id, user_id, body, created_at) VALUES (?, ?, ?, ?)",
+                (entry_id, user_id, body, _now()),
+            )
+            row = conn.execute(
+                self._COMMENT_SELECT + "WHERE comments.id = ?", (cursor.lastrowid,)
+            ).fetchone()
+            return dict(row)
+
+    def list_comments(self, entry_id: int) -> list[dict]:
+        with self._session() as conn:
+            rows = conn.execute(
+                self._COMMENT_SELECT + "WHERE comments.entry_id = ? ORDER BY comments.id",
+                (entry_id,),
+            ).fetchall()
+            return [dict(r) for r in rows]
+
+    def get_comment(self, comment_id: int) -> dict | None:
+        with self._session() as conn:
+            row = conn.execute(
+                self._COMMENT_SELECT + "WHERE comments.id = ?", (comment_id,)
+            ).fetchone()
+            return dict(row) if row else None
+
+    def delete_comment(self, comment_id: int) -> None:
+        with self._session() as conn:
+            conn.execute("DELETE FROM comments WHERE id = ?", (comment_id,))
 
     def create_entry(
         self,
