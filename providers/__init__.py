@@ -26,6 +26,7 @@ class BookResult:
     year: int | None = None
     isbn: str | None = None
     summary: str = ""
+    summary_source: str | None = None  # URL, jos kuvaus ei ole lähteen oma (Wikipedia)
     # Palvelin johtaa osoitteen itse lähteen vastauksesta. Asiakkaan antamaa
     # kansikuva-URL:ia ei koskaan käytetä (SSRF).
     cover_url: str | None = None

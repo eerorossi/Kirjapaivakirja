@@ -461,3 +461,56 @@ def test_looks_finnish():
 def test_finna_drops_non_finnish_summary():
     rec = {"id": "x.1", "title": "Kirja", "summary": ["Romanen handlar om kriget och soldaterna som är vanliga män."]}
     assert FinnaProvider(client(no_requests))._parse(rec).summary == ""
+
+
+# --- kirjan kuvaus Wikipediasta ------------------------------------------------
+
+SINUHE = {
+    "type": "standard",
+    "description": "Mika Waltarin romaani",
+    "extract": "Sinuhe egyptiläinen on Mika Waltarin vuonna 1945 julkaisema historiallinen romaani.",
+    "content_urls": {"desktop": {"page": "https://fi.wikipedia.org/wiki/Sinuhe_egyptil%C3%A4inen"}},
+}
+
+
+def test_wikipedia_book_found_with_sentence_case_title():
+    seen = []
+
+    def handler(request):
+        seen.append(request.url.raw_path)
+        if request.url.raw_path.endswith(b"/Sinuhe_egyptil%C3%A4inen"):
+            return json_response(SINUHE)
+        return httpx.Response(404)
+
+    found = WikipediaBios(client(handler)).lookup_book("Sinuhe Egyptiläinen", "Mika Waltari")
+    assert found == (SINUHE["extract"], "https://fi.wikipedia.org/wiki/Sinuhe_egyptil%C3%A4inen")
+    assert len(seen) == 2  # alkuperäinen kirjoitusasu ensin, sitten pienennetty
+
+
+def test_wikipedia_book_rejects_wrong_author_non_book_and_disambiguation():
+    def serve(page):
+        return WikipediaBios(client(lambda r: json_response(page)))
+
+    assert serve(SINUHE).lookup_book("Sinuhe", "Joku Muu") is None  # väärä kirjailija
+    film = {**SINUHE, "description": "elokuva", "extract": "Elokuva, jonka ohjasi Waltari."}
+    assert serve(film).lookup_book("Sinuhe", "Mika Waltari") is None  # ei kirja
+    assert serve({**SINUHE, "type": "disambiguation"}).lookup_book("Sinuhe", "Mika Waltari") is None
+
+
+def test_wikipedia_book_skips_unknown_author_and_survives_errors():
+    assert WikipediaBios(client(no_requests)).lookup_book("Kirja", "Tuntematon kirjailija") is None
+    assert WikipediaBios(client(lambda r: httpx.Response(500))).lookup_book("Kirja", "Mika Waltari") is None
+
+
+def test_fetch_falls_back_to_wikipedia_summary_only_when_no_finnish_summary():
+    wiki = FakeWiki(book_found=("Wikipedian teksti.", "https://fi.wikipedia.org/wiki/X"))
+    bare = result("finna", "f1", "Sinuhe", "Mika Waltari")
+    r = BookService([Fake("finna", details={"f1": bare})], wiki).fetch("finna", "f1")
+    assert (r.summary, r.summary_source) == ("Wikipedian teksti.", "https://fi.wikipedia.org/wiki/X")
+    assert wiki.book_calls == [("Sinuhe", "Mika Waltari")]
+
+    wiki2 = FakeWiki(book_found=("Ei pitäisi käyttää.", "https://x"))
+    own = result("finna", "f2", summary="Kirjaston oma kuvaus.")
+    r2 = BookService([Fake("finna", details={"f2": own})], wiki2).fetch("finna", "f2")
+    assert r2.summary == "Kirjaston oma kuvaus." and r2.summary_source is None
+    assert wiki2.book_calls == []

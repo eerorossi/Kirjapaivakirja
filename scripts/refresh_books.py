@@ -42,7 +42,7 @@ def main() -> int:
                 continue
             done = []
             if missing_summary and result.summary:
-                store.set_summary(book["id"], result.summary)
+                store.set_summary(book["id"], result.summary, result.summary_source)
                 done.append("kuvaus")
             elif wrong_language:
                 store.set_summary(book["id"], "")  # ei suomenkielistä kuvausta saatavilla

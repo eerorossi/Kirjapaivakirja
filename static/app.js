@@ -241,7 +241,8 @@ function bookInfo(book, { openSummary = false } = {}) {
   const summary = book.summary
     ? h("details", { class: "fold", open: openSummary },
         h("summary", {}, "Kirjan kuvaus"),
-        h("div", { class: "fold-body" }, paragraphs(book.summary)))
+        h("div", { class: "fold-body" }, paragraphs(book.summary),
+          book.summary_source ? sourceNote(book.summary_source) : null))
     : null;
   if (!summary && !bio && !book.isbn) return null;
   return h("div", { class: "info" }, summary, bio,

@@ -23,8 +23,12 @@ class Fake:
 
 
 class FakeWiki:
-    def __init__(self, found=None):
-        self.found, self.calls = found, []
+    def __init__(self, found=None, book_found=None):
+        self.found, self.book_found, self.calls, self.book_calls = found, book_found, [], []
+
+    def lookup_book(self, title, author):
+        self.book_calls.append((title, author))
+        return self.book_found
 
     def lookup(self, name):
         self.calls.append(name)

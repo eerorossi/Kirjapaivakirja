@@ -22,6 +22,7 @@ CREATE TABLE IF NOT EXISTS books (
     year INTEGER,
     isbn TEXT,
     summary TEXT NOT NULL DEFAULT '',
+    summary_source TEXT,
     author_bio TEXT NOT NULL DEFAULT '',
     author_bio_source TEXT,
     cover_path TEXT,
@@ -116,6 +117,8 @@ class Store:
         columns = {row["name"] for row in conn.execute("PRAGMA table_info(books)")}
         if "author_bio_source" not in columns:
             conn.execute("ALTER TABLE books ADD COLUMN author_bio_source TEXT")
+        if "summary_source" not in columns:
+            conn.execute("ALTER TABLE books ADD COLUMN summary_source TEXT")
 
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.db_path)
@@ -194,6 +197,7 @@ class Store:
         year: int | None = None,
         isbn: str | None = None,
         summary: str = "",
+        summary_source: str | None = None,
         author_bio: str = "",
         author_bio_source: str | None = None,
         source: str = "manual",
@@ -204,11 +208,12 @@ class Store:
         with self._session() as conn:
             cursor = conn.execute(
                 "INSERT INTO books (source, source_id, title, author, year, isbn, "
-                "summary, author_bio, author_bio_source, cover_path, created_by, created_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "summary, summary_source, author_bio, author_bio_source, cover_path, "
+                "created_by, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     source, source_id, title, author, year, isbn,
-                    summary, author_bio, author_bio_source, cover_path,
+                    summary, summary_source, author_bio, author_bio_source, cover_path,
                     created_by, _now(),
                 ),
             )
@@ -237,9 +242,12 @@ class Store:
                 "UPDATE books SET cover_path = ? WHERE id = ?", (cover_path, book_id)
             )
 
-    def set_summary(self, book_id: int, summary: str) -> None:
+    def set_summary(self, book_id: int, summary: str, source: str | None = None) -> None:
         with self._session() as conn:
-            conn.execute("UPDATE books SET summary = ? WHERE id = ?", (summary, book_id))
+            conn.execute(
+                "UPDATE books SET summary = ?, summary_source = ? WHERE id = ?",
+                (summary, source, book_id),
+            )
 
     def list_books(self, q: str | None = None, limit: int = 50) -> list[dict]:
         """Hae omasta tietokannasta nimen tai kirjailijan osalla (ei ulkoista hakua)."""

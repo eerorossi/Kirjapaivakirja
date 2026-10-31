@@ -203,6 +203,7 @@ def create_app(
                 year=result.year,
                 isbn=result.isbn,
                 summary=result.summary,
+                summary_source=result.summary_source,
                 author_bio=result.author_bio,
                 author_bio_source=result.author_bio_source,
                 source=body.source,

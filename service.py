@@ -114,6 +114,10 @@ class BookService:
             if found:
                 result.author_bio, result.author_bio_source = found
         self._enrich(result)
+        if not result.summary and self.wiki is not None and result.author != UNKNOWN_AUTHOR:
+            found = self.wiki.lookup_book(result.title, result.author)
+            if found:
+                result.summary, result.summary_source = found
         result.summary = result.summary[:MAX_SUMMARY_CHARS]
         result.author_bio = result.author_bio[:MAX_BIO_CHARS]
         return result

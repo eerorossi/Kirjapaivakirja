@@ -176,3 +176,13 @@ def test_migration_adds_author_bio_source_to_old_database(tmp_path):
     new = store.create_book("Uusi", "X", author_bio_source="https://example.org")
     assert new["author_bio_source"] == "https://example.org"
     Store(path)  # toinen käynnistys ei kaadu (sarake on jo olemassa)
+
+
+def test_set_summary_stores_text_and_source(store):
+    book = _book(store)
+    assert book["summary_source"] is None
+    store.set_summary(book["id"], "Kuvaus.", "https://fi.wikipedia.org/wiki/X")
+    updated = store.get_book(book["id"])
+    assert (updated["summary"], updated["summary_source"]) == ("Kuvaus.", "https://fi.wikipedia.org/wiki/X")
+    store.set_summary(book["id"], "")
+    assert store.get_book(book["id"])["summary_source"] is None
