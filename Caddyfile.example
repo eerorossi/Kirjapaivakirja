@@ -1,4 +1,4 @@
-# Esimerkki: Kirjapäiväkirjan lohko olemassa olevaan Caddyfileen.
+# Esimerkki: Kirjapäiväkirjan lohko olemassa olevaan Caddyfileen (toimii tuotannossa).
 # Oletus: (authelia)-snippet on määritelty kuten liikuntapaivakirja-repossa:
 #
 # (authelia) {
@@ -7,15 +7,21 @@
 #         copy_headers Remote-User Remote-Groups Remote-Email Remote-Name
 #     }
 # }
+#
+# <APP_HOST> on osoite, josta Caddy tavoittaa sovelluksen portin 8097:
+#  - Caddy samassa Docker-verkossa: kontin nimi (kirjapaivakirja)
+#  - Caddy toisessa kontissa tai koneella: Pin LAN-osoite (192.168.x.x), ei localhost
+# Sido sovelluksen portti vain tähän osoitteeseen (BIND_ADDR), ettei Authelian ohi pääse.
 
-# forward_auth ajetaan ulommassa handle-lohkossa, jotta Authelia näkee
-# alkuperäisen polun (/kp/...) eikä prefiksin poiston jälkeistä polkua.
-handle /kp* {
+# Osoite ilman loppukauttaviivaa ohjataan oikeaan paikkaan.
+redir /kp /kp/
+
+# handle_path poistaa /kp-etuliitteen ennen sovellukseen välitystä; sovellus saa
+# etuliitteen X-Forwarded-Prefix-headerista ja rakentaa osoitteensa sen mukaan.
+handle_path /kp/* {
     import authelia
-    handle_path /kp* {
-        reverse_proxy <APP_HOST>:8097 {
-            header_up X-Forwarded-Prefix /kp
-        }
+    reverse_proxy <APP_HOST>:8097 {
+        header_up X-Forwarded-Prefix /kp
     }
     encode gzip
 }

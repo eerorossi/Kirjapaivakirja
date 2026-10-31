@@ -280,6 +280,11 @@ class Store:
                 "UPDATE books SET cover_path = ? WHERE id = ?", (cover_path, book_id)
             )
 
+    def ping(self) -> None:
+        """Nostaa virheen, jos tietokantaan ei saada yhteyttä (terveystarkistus)."""
+        with self._session() as conn:
+            conn.execute("SELECT 1").fetchone()
+
     def set_summary(self, book_id: int, summary: str, source: str | None = None) -> None:
         with self._session() as conn:
             conn.execute(

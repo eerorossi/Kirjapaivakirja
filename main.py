@@ -426,6 +426,16 @@ def create_app(
             _remove_cover(request.app.state.covers_dir, orphan)
         return Response(status_code=204)
 
+    @app.get("/healthz", include_in_schema=False)
+    def healthz(store: Store = Depends(get_store)) -> dict:
+        """Kontin terveystarkistus: ei vaadi kirjautumista, ei paljasta mitään datasta."""
+        try:
+            store.ping()
+        except Exception:  # noqa: BLE001
+            log.exception("Health check failed")
+            raise HTTPException(status_code=503, detail="Database unavailable")
+        return {"status": "ok"}
+
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
     @app.get("/", include_in_schema=False)

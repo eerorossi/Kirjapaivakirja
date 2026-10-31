@@ -1,3 +1,8 @@
+def test_healthz_needs_no_auth_and_reveals_nothing(client):
+    r = client.get("/healthz")
+    assert r.status_code == 200 and r.json() == {"status": "ok"}
+
+
 def test_me_without_header_is_401(client):
     assert client.get("/api/me").status_code == 401
 
