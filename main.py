@@ -13,6 +13,7 @@ from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
+import notifier
 from auth import get_current_user
 from paths import base_href
 from providers import ProviderError
@@ -46,6 +47,12 @@ class EntryIn(BaseModel):
     read_on: date
     note: str = Field(default="", max_length=20000)
     rating: Optional[int] = Field(default=None, ge=1, le=5)
+
+
+class SettingsIn(BaseModel):
+    notify_new_books: bool
+    notify_comments: bool
+    notify_likes: bool
 
 
 class CommentIn(BaseModel):
@@ -93,6 +100,17 @@ def _remove_cover(covers_dir: str, book: dict) -> None:
 MAX_COMMENT_CHARS = 2000
 
 
+def _queue(request: Request, action, *args) -> None:
+    """Lisää ilmoituksen jonoon. Virhe täällä ei saa kaataa varsinaista toimintoa (kirjaus, kommentti, peukku)."""
+    config = request.app.state.mail
+    if config is None:
+        return
+    try:
+        action(request.app.state.store, config, *args)
+    except Exception:  # noqa: BLE001
+        log.exception("Could not queue notification")
+
+
 def _existing_entry(store: Store, entry_id: int) -> dict:
     entry = store.get_entry(entry_id)
     if entry is None:
@@ -114,15 +132,28 @@ def create_app(
     store: Store | None = None,
     books: BookService | None = None,
     covers_dir: str | None = None,
+    mail_config: notifier.MailConfig | None = None,
+    mailer=None,
+    start_notifier: bool = True,
 ) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         app.state.store = store or Store()
         app.state.books = books or build_default_service()
         app.state.covers_dir = covers_dir or os.getenv("COVERS_DIR", "/app/data/covers")
+        # Sähköposti-ilmoitukset ovat päällä vain, jos MAIL_HOST on asetettu (tai testeissä annettu).
+        app.state.mail = mail_config or notifier.MailConfig.from_env()
+        worker = None
+        if app.state.mail is not None and start_notifier:
+            worker = notifier.NotifierThread(
+                app.state.store, mailer or notifier.SmtpMailer(app.state.mail), app.state.mail
+            )
+            worker.start()
         try:
             yield
         finally:
+            if worker is not None:
+                worker.stop()
             if books is None:  # suljetaan vain itse luotu HTTP-asiakas
                 app.state.books.close()
 
@@ -135,6 +166,32 @@ def create_app(
             "email": user["email"],
             "display_name": user["display_name"],
         }
+
+    # --- ilmoitusasetukset ---------------------------------------------
+
+    def _settings(user: dict, request: Request) -> dict:
+        return {
+            "email_enabled": request.app.state.mail is not None,
+            "notify_new_books": bool(user["notify_new_books"]),
+            "notify_comments": bool(user["notify_comments"]),
+            "notify_likes": bool(user["notify_likes"]),
+        }
+
+    @app.get("/api/settings")
+    def get_settings(request: Request, user: dict = Depends(get_current_user)) -> dict:
+        return _settings(user, request)
+
+    @app.put("/api/settings")
+    def put_settings(
+        body: SettingsIn,
+        request: Request,
+        user: dict = Depends(get_current_user),
+        store: Store = Depends(get_store),
+    ) -> dict:
+        updated = store.set_notify_prefs(
+            user["id"], body.notify_new_books, body.notify_comments, body.notify_likes
+        )
+        return _settings(updated, request)
 
     # --- kirjat --------------------------------------------------------
 
@@ -300,15 +357,18 @@ def create_app(
     @app.post("/api/entries", status_code=201)
     def create_entry(
         body: EntryIn,
+        request: Request,
         user: dict = Depends(get_current_user),
         store: Store = Depends(get_store),
     ) -> dict:
         if store.get_book(body.book_id) is None:
             raise HTTPException(status_code=404, detail="Book not found")
-        return store.create_entry(
+        entry = store.create_entry(
             user["id"], body.book_id, body.read_on.isoformat(),
             body.note.strip(), body.rating,
         )
+        _queue(request, notifier.queue_new_entry, entry)
+        return entry
 
     @app.get("/api/entries/{entry_id}")
     def get_entry(
@@ -329,11 +389,13 @@ def create_app(
     @app.put("/api/entries/{entry_id}/like")
     def like_entry(
         entry_id: int,
+        request: Request,
         user: dict = Depends(get_current_user),
         store: Store = Depends(get_store),
     ) -> dict:
-        _existing_entry(store, entry_id)
-        store.add_like(entry_id, user["id"])  # idempotentti: toinen peukutus ei tee mitään
+        entry = _existing_entry(store, entry_id)
+        if store.add_like(entry_id, user["id"]):  # idempotentti: toinen peukutus ei tee mitään
+            _queue(request, notifier.queue_like, entry, user["id"])
         return _like_state(store, entry_id, True)
 
     @app.delete("/api/entries/{entry_id}/like")
@@ -375,6 +437,7 @@ def create_app(
     def add_comment(
         entry_id: int,
         body: CommentIn,
+        request: Request,
         user: dict = Depends(get_current_user),
         store: Store = Depends(get_store),
     ) -> dict:
@@ -384,7 +447,9 @@ def create_app(
             raise HTTPException(
                 status_code=422, detail=f"Comment must be 1-{MAX_COMMENT_CHARS} characters"
             )
-        return _public_comment(store.add_comment(entry_id, user["id"], text), entry, user)
+        comment = store.add_comment(entry_id, user["id"], text)
+        _queue(request, notifier.queue_comment, entry, comment)
+        return _public_comment(comment, entry, user)
 
     @app.delete("/api/comments/{comment_id}", status_code=204, response_class=Response)
     def delete_comment(

@@ -21,6 +21,11 @@
       COVERS_DIR: /app/data/covers
       AUTH_EMAIL_HEADER: Remote-Email
       AUTH_NAME_HEADER: Remote-Name
+      # Sähköposti-ilmoitukset (pois päältä, jos MAIL_HOST puuttuu). Rele: docker-compose.mail-relay.snippet.yml
+      MAIL_HOST: mail-relay
+      MAIL_PORT: "587"
+      MAIL_FROM: "Kirjapäiväkirja <osoite@gmail.com>"   # sama osoite kuin releen tilillä
+      PUBLIC_URL: https://example.dy.fi/kp/             # linkit viesteissä
     volumes:
       - ./volumes/kirjapaivakirja/data:/app/data
     logging:

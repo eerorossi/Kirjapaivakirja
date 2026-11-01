@@ -711,11 +711,49 @@ async function renderEntry([id], ctx) {
   ctx.mount(h("section", {}, parts), book.title);
 }
 
+async function renderSettings(_args, ctx) {
+  const settings = await api("api/settings");
+  const options = [
+    ["notify_new_books", "Uudet kirjat", "Viesti, kun joku toinen kirjaa luetun kirjan"],
+    ["notify_comments", "Kommentit", "Viesti, kun joku kommentoi kirjaustasi"],
+    ["notify_likes", "Peukut", "Viesti, kun joku peukuttaa kirjaustasi (useampi peukku niputetaan yhteen viestiin)"],
+  ];
+  const boxes = options.map(([key, label, hint]) => {
+    const box = h("input", { type: "checkbox", id: `s-${key}`, name: key });
+    box.checked = settings[key];
+    box.addEventListener("change", async () => {
+      box.disabled = true;
+      const body = Object.fromEntries(options.map(([k]) => [k, document.getElementById(`s-${k}`).checked]));
+      try {
+        await api("api/settings", { method: "PUT", body });
+        toast("Asetus tallennettu");
+      } catch (error) {
+        box.checked = !box.checked;
+        showError(error);
+      } finally {
+        box.disabled = false;
+      }
+    });
+    return h("label", { class: "check", for: `s-${key}` }, box,
+      h("span", { class: "check-text" }, h("span", { class: "label" }, label), h("span", { class: "check-hint" }, hint)));
+  });
+  const view = h("section", {},
+    h("h2", { class: "view-title", tabindex: "-1" }, "Asetukset"),
+    h("p", { class: "count" }, `Kirjautunut: ${me.email}`),
+    h("h3", { class: "form-title" }, "Sähköposti-ilmoitukset"),
+    settings.email_enabled
+      ? h("p", { class: "muted" }, `Viestit lähetetään osoitteeseen ${me.email}.`)
+      : h("p", { class: "muted" }, "Palvelimella ei ole otettu käyttöön sähköpostin lähetystä, joten viestejä ei lähetetä. Valinnat tallentuvat silti."),
+    h("div", { class: "checks" }, boxes));
+  ctx.mount(view, "Asetukset");
+}
+
 // ---------- reititys ----------
 
 const ROUTES = [
   [/^#\/?$/, renderList],
   [/^#\/feed$/, renderFeed],
+  [/^#\/settings$/, renderSettings],
   [/^#\/new$/, renderSearch],
   [/^#\/new\/(\d+)$/, renderNewEntry],
   [/^#\/entry\/(\d+)$/, renderEntry],
@@ -738,7 +776,10 @@ function makeContext(token) {
 function markNav(hash) {
   // Kirjauksen sivu perii sen välilehden, josta tultiin (syöte tai omat kirjaukset).
   if (hash.startsWith("#/entry/") && document.querySelector(".tab-on")) return;
-  const active = hash.startsWith("#/new") ? navNew : hash === "#/feed" ? navFeed : navList;
+  const active = hash.startsWith("#/new") ? navNew
+    : hash === "#/feed" ? navFeed
+    : hash === "#/settings" ? null
+    : navList;
   for (const tab of [navFeed, navList, navNew]) {
     const on = tab === active;
     tab.classList.toggle("tab-on", on);

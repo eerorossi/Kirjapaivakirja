@@ -1,0 +1,41 @@
+# Jaettu sähköpostirele: liitä yhteisen docker-compose.yml:n services:-avaimen alle.
+#
+# Rele ottaa vastaan tavallista SMTP:tä kotiverkossa (ilman tunnuksia) ja lähettää viestit
+# eteenpäin oikean postilaatikon kautta. Ulkoisen palvelun tunnukset ovat vain täällä; kaikki
+# sovellukset (Kirjapäiväkirja, muut kontit, Proxmox) osoittavat tähän releeseen.
+#
+# Esimerkki: Gmail. Vaatii kaksivaiheisen vahvistuksen ja sovellussalasanan
+# (Google-tili > Suojaus > Sovellussalasanat). Gmail lähettää aina tilin omalla osoitteella,
+# joten MAIL_FROM (ja Proxmoxin From-osoite) pitää olla sama Gmail-osoite.
+#
+# Aseta tunnukset .env-tiedostoon compose-tiedoston viereen:
+#   MAIL_RELAY_USER=osoite@gmail.com
+#   MAIL_RELAY_PASSWORD=sovellussalasana
+#   MAIL_RELAY_SENDER_DOMAIN=gmail.com
+#   MAIL_RELAY_NETWORKS=172.16.0.0/12,192.168.1.30/32   # Docker-verkot + ne koneet (esim. Proxmox), jotka saavat lähettää
+#   MAIL_RELAY_BIND=192.168.1.179                       # LAN-osoite, jossa portti 2587 kuuntelee
+#
+# Älä jätä porttia auki koko verkkoon: jokainen sallituista verkoista voi lähettää postia tilisi nimissä.
+
+  mail-relay:
+    image: boky/postfix
+    container_name: mail-relay
+    restart: unless-stopped
+    environment:
+      RELAYHOST: "[smtp.gmail.com]:587"
+      RELAYHOST_USERNAME: ${MAIL_RELAY_USER}
+      RELAYHOST_PASSWORD: ${MAIL_RELAY_PASSWORD}
+      ALLOWED_SENDER_DOMAINS: ${MAIL_RELAY_SENDER_DOMAIN:-gmail.com}
+      POSTFIX_mynetworks: ${MAIL_RELAY_NETWORKS:-172.16.0.0/12}
+      POSTFIX_myhostname: mail-relay
+    ports:
+      # Vain tarvittaville koneille (esim. Proxmox). Docker-verkon kontit käyttävät mail-relay:587 ilman tätä.
+      - "${MAIL_RELAY_BIND:-127.0.0.1}:2587:587"
+    volumes:
+      # Jonossa odottavat viestit säilyvät uudelleenkäynnistyksessä.
+      - ./volumes/mail-relay/spool:/var/spool/postfix
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

@@ -10,7 +10,10 @@ CREATE TABLE IF NOT EXISTS users (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     email TEXT NOT NULL UNIQUE,
     display_name TEXT NOT NULL,
-    created_at TEXT NOT NULL
+    created_at TEXT NOT NULL,
+    notify_new_books INTEGER NOT NULL DEFAULT 1,
+    notify_comments INTEGER NOT NULL DEFAULT 1,
+    notify_likes INTEGER NOT NULL DEFAULT 1
 );
 
 CREATE TABLE IF NOT EXISTS books (
@@ -60,7 +63,30 @@ CREATE TABLE IF NOT EXISTS comments (
     created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_comments_entry ON comments(entry_id, id);
+
+-- Lähtevät sähköposti-ilmoitukset (jono). Taustasäie lähettää ja yrittää uudelleen.
+CREATE TABLE IF NOT EXISTS notifications (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind TEXT NOT NULL CHECK (kind IN ('new_entry', 'comment', 'like')),
+    recipient_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    entry_id INTEGER NOT NULL REFERENCES entries(id) ON DELETE CASCADE,
+    actor_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    comment_id INTEGER,
+    created_at TEXT NOT NULL,
+    send_after TEXT NOT NULL,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    handled_at TEXT,
+    error TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_notifications_due ON notifications(handled_at, send_after);
 """
+
+# Käyttäjän ilmoitusasetukset (sarakkeet users-taulussa), kind -> sarake.
+NOTIFY_COLUMNS = {
+    "new_entry": "notify_new_books",
+    "comment": "notify_comments",
+    "like": "notify_likes",
+}
 
 # Sallitut lajittelut (S5). Kirjan nimi ja kirjailija lajitellaan
 # kirjainkoosta riippumatta (FOLD-kollaatio, ks. _connect).
@@ -157,6 +183,10 @@ class Store:
             conn.execute("ALTER TABLE books ADD COLUMN author_bio_source TEXT")
         if "summary_source" not in columns:
             conn.execute("ALTER TABLE books ADD COLUMN summary_source TEXT")
+        user_columns = {row["name"] for row in conn.execute("PRAGMA table_info(users)")}
+        for column in NOTIFY_COLUMNS.values():
+            if column not in user_columns:
+                conn.execute(f"ALTER TABLE users ADD COLUMN {column} INTEGER NOT NULL DEFAULT 1")
 
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.db_path)
@@ -362,14 +392,111 @@ class Store:
                 _mark_liked(conn, [entry], viewer_id)
             return entry
 
-    # --- peukutukset (So2, So4) ---------------------------------------
+    # --- ilmoitukset ---------------------------------------------------
 
-    def add_like(self, entry_id: int, user_id: int) -> None:
+    def set_notify_prefs(self, user_id: int, new_books: bool, comments: bool, likes: bool) -> dict:
         with self._session() as conn:
             conn.execute(
+                "UPDATE users SET notify_new_books = ?, notify_comments = ?, notify_likes = ? WHERE id = ?",
+                (int(new_books), int(comments), int(likes), user_id),
+            )
+        return self.get_user(user_id)
+
+    def list_notification_recipients(self, kind: str, exclude_user_id: int) -> list[dict]:
+        """Käyttäjät, jotka haluavat tämän lajin ilmoituksia (ei tekijää itseään)."""
+        column = NOTIFY_COLUMNS[kind]  # KeyError, jos laji on tuntematon: ei SQL-injektiota
+        with self._session() as conn:
+            rows = conn.execute(
+                f"SELECT * FROM users WHERE {column} = 1 AND id != ? AND instr(email, '@') > 0 ORDER BY id",
+                (exclude_user_id,),
+            ).fetchall()
+            return [dict(r) for r in rows]
+
+    def add_notification(
+        self,
+        kind: str,
+        recipient_id: int,
+        entry_id: int,
+        actor_id: int,
+        send_after: str,
+        comment_id: int | None = None,
+        unique: bool = False,
+    ) -> int | None:
+        """Lisää ilmoituksen jonoon. unique=True: ei lisätä, jos sama tekijä+kirjaus+vastaanottaja on jo jonossa
+        tai lähetetty (peukun perumisesta ja uudelleenlisäyksestä ei tule uutta viestiä)."""
+        with self._session() as conn:
+            if unique:
+                exists = conn.execute(
+                    "SELECT 1 FROM notifications WHERE kind = ? AND recipient_id = ? "
+                    "AND entry_id = ? AND actor_id = ? LIMIT 1",
+                    (kind, recipient_id, entry_id, actor_id),
+                ).fetchone()
+                if exists:
+                    return None
+            cursor = conn.execute(
+                "INSERT INTO notifications "
+                "(kind, recipient_id, entry_id, actor_id, comment_id, created_at, send_after) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (kind, recipient_id, entry_id, actor_id, comment_id, _now(), send_after),
+            )
+            return cursor.lastrowid
+
+    def due_notifications(self, now_iso: str, limit: int = 200) -> list[dict]:
+        with self._session() as conn:
+            rows = conn.execute(
+                "SELECT * FROM notifications WHERE handled_at IS NULL AND send_after <= ? "
+                "ORDER BY id LIMIT ?",
+                (now_iso, limit),
+            ).fetchall()
+            return [dict(r) for r in rows]
+
+    def unhandled_notifications(self, kind: str, recipient_id: int, entry_id: int) -> list[dict]:
+        with self._session() as conn:
+            rows = conn.execute(
+                "SELECT * FROM notifications WHERE handled_at IS NULL AND kind = ? "
+                "AND recipient_id = ? AND entry_id = ? ORDER BY id",
+                (kind, recipient_id, entry_id),
+            ).fetchall()
+            return [dict(r) for r in rows]
+
+    def finish_notifications(self, ids: list[int], handled_at: str, error: str | None = None) -> None:
+        if not ids:
+            return
+        marks = ",".join("?" * len(ids))
+        with self._session() as conn:
+            conn.execute(
+                f"UPDATE notifications SET handled_at = ?, error = ? WHERE id IN ({marks})",
+                [handled_at, error, *ids],
+            )
+
+    def retry_notifications(self, ids: list[int], send_after: str, error: str) -> None:
+        if not ids:
+            return
+        marks = ",".join("?" * len(ids))
+        with self._session() as conn:
+            conn.execute(
+                f"UPDATE notifications SET attempts = attempts + 1, send_after = ?, error = ? "
+                f"WHERE id IN ({marks})",
+                [send_after, error, *ids],
+            )
+
+    def purge_notifications(self, before_iso: str) -> int:
+        with self._session() as conn:
+            return conn.execute(
+                "DELETE FROM notifications WHERE handled_at IS NOT NULL AND handled_at < ?",
+                (before_iso,),
+            ).rowcount
+
+    # --- peukutukset (So2, So4) ---------------------------------------
+
+    def add_like(self, entry_id: int, user_id: int) -> bool:
+        """Palauttaa True, jos peukutus on uusi (False: käyttäjä oli jo peukuttanut)."""
+        with self._session() as conn:
+            cursor = conn.execute(
                 "INSERT OR IGNORE INTO likes (entry_id, user_id, created_at) VALUES (?, ?, ?)",
                 (entry_id, user_id, _now()),
             )
+            return cursor.rowcount == 1
 
     def remove_like(self, entry_id: int, user_id: int) -> None:
         with self._session() as conn:

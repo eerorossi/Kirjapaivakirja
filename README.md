@@ -14,6 +14,7 @@ Toteutusvaiheet:
 3. Käyttöliittymä: haku, uusi kirjaus, omat kirjaukset, muokkaus ja poisto (toteutettu)
 4. Sosiaaliset ominaisuudet: syöte, peukutukset, kommentit (So1–So5) (toteutettu)
 5. Käyttöönotto: Docker, Caddy, terveystarkistus (toteutettu; varmuuskopiot hoidetaan koko koneen varmistuksella)
+6. Sähköposti-ilmoitukset: jaettu SMTP-rele, uudet kirjat, kommentit ja peukut (toteutettu)
 
 ## Kehitys lokaalisti
 
@@ -39,6 +40,7 @@ Mobiili ensin: yksi sarake, alapalkki (Syöte / Kirjaukset / Lisää kirja), 44�
 - `#/` omat kirjaukset, lajittelu uusin / kirjan nimi / kirjailija (valinta muistetaan selaimessa)
 - `#/new` haku (omat tallennetut kirjat + Finna/Open Library) tai kirjan lisäys käsin
 - `#/new/<kirja>` uusi kirjaus: lukupäivä, arvio 1–5 (valinnainen), muistiinpano
+- `#/settings` ilmoitusasetukset (avautuu napauttamalla omaa nimeä yläpalkissa)
 - `#/entry/<id>` kirjauksen katselu, kommentit ja peukutus; oma kirjaus muokattavissa ja poistettavissa. Kirjauksen tekijä näkee, ketkä ovat peukuttaneet; kommentin voi poistaa sen kirjoittaja tai kirjauksen tekijä
 
 Sovellus toimii myös alipolun alla (esim. `/kp`): palvelin lisää sivulle `<base href>`-tagin `X-Forwarded-Prefix`-headerista, ja kaikki osoitteet ovat suhteellisia. Caddyssä kannattaa lisätä `redir /kp /kp/`, jotta osoite ilman loppukauttaviivaa ohjautuu oikein.
@@ -50,6 +52,7 @@ Kaikki reitit vaativat Authelian headerit (muuten 401). Interaktiivinen dokument
 | Reitti | Kuvaus |
 |---|---|
 | `GET /api/me` | Kirjautunut käyttäjä |
+| `GET/PUT /api/settings` | Sähköposti-ilmoitusten valinnat (`notify_new_books`, `notify_comments`, `notify_likes`) ja `email_enabled` |
 | `GET /api/books?q=` | Hae omasta tietokannasta nimen tai kirjailijan osalla |
 | `POST /api/books` | Lisää kirja käsin (`title`, `author` pakollisia; `year`, `isbn`, `summary` valinnaisia) |
 | `GET /api/books/search?q=` | Haku ulkoisista lähteistä (Finna ensin, sitten Open Library). Palauttaa `results` ja `unavailable` (lähteet, jotka eivät vastanneet) |
@@ -122,6 +125,35 @@ docker compose up -d --build kirjapaivakirja
 
 Tietokannan uudet sarakkeet ja taulut lisätään käynnistyksessä itsestään; tiedot säilyvät.
 
+## Sähköposti-ilmoitukset
+
+Viestit lähtevät, kun (1) joku kirjaa uuden kirjan (kaikille muille käyttäjille), (2) joku kommentoi kirjaustasi tai (3) joku peukuttaa sitä. Jokainen käyttäjä valitsee itse, mistä saa viestin (nimi oikeassa yläkulmassa → Asetukset; oletuksena kaikki päällä). Osoite tulee Authelian `Remote-Email`-headerista. Kenenkään omista teoista ei lähde viestiä itselle.
+
+**Rakenne.** Sovellus ei puhu ulkoiselle sähköpostipalvelulle itse. Se lähettää tavallisen SMTP-viestin jaettuun releeseen (`mail-relay`, Postfix), ja rele hoitaa lähetyksen oikean postilaatikon kautta. Hyödyt: ulkoisen palvelun tunnukset ovat yhdessä paikassa, kotiverkon IP:stä lähetetty posti ei jää roskapostiin, ja sama rele kelpaa muille sovelluksille ja Proxmoxille.
+
+```
+Kirjapäiväkirja ─┐
+Muut sovellukset ─┼── SMTP (kotiverkko, ei tunnuksia) ──► mail-relay ── SMTP + tunnukset ──► Gmail / muu palvelu ──► vastaanottaja
+Proxmox          ─┘
+```
+
+**Käyttöönotto.**
+
+1. Liitä `docker-compose.mail-relay.snippet.yml` yhteiseen compose-tiedostoon ja täytä tunnukset `.env`-tiedostoon (ohjeet tiedoston alussa). Gmailissa tarvitaan kaksivaiheinen vahvistus ja sovellussalasana.
+2. Lisää Kirjapäiväkirjan compose-lohkoon `MAIL_HOST`, `MAIL_FROM` ja `PUBLIC_URL` (valmiina `docker-compose.snippet.yml`:ssä). Ilman `MAIL_HOST`:ia ilmoitukset ovat pois päältä, eikä niitä jonoteta.
+3. `docker compose up -d mail-relay kirjapaivakirja`
+4. Kokeile: `docker compose exec -T kirjapaivakirja python scripts/send_test_mail.py oma@osoite.fi`
+
+**Toiminta.** Tapahtumat menevät tietokannan jonoon (`notifications`), ja taustasäie lähettää ne ~20 sekunnin välein, joten pyynnöt eivät odota sähköpostia. Jos lähetys epäonnistuu (rele alhaalla), yritys toistuu 1, 5, 15, 60, 240 ja 720 minuutin jälkeen, minkä jälkeen ilmoitus hylätään. Peukut viivästetään 10 minuuttia (`LIKE_DELAY_MINUTES`) ja niputetaan yhteen viestiin kirjausta kohti; peukun perumisesta ja uudelleenlisäyksestä ei tule uutta viestiä. Jos kirjaus tai kommentti ehtii poistua, tai käyttäjä kytkee ilmoituksen pois ennen lähetystä, viestiä ei lähetetä. Käsitellyt jonon rivit poistetaan 30 päivän kuluttua.
+
+**Releen käyttö muualta.**
+
+- *Samassa Docker-verkossa oleva kontti:* palvelin `mail-relay`, portti `587`, ei salausta, ei tunnuksia.
+- *Proxmox VE* (Datacenter → Notifications → Notification Targets → Add → SMTP): Server = Pin LAN-osoite (`MAIL_RELAY_BIND`), Port = `2587`, Encryption = Insecure, Authenticate pois päältä, From address = releen tilin osoite (Gmailissa sama osoite kuin `MAIL_RELAY_USER`), Recipient = oma osoitteesi. Paina Test-painiketta. Lisää tarvittaessa matcher, joka ohjaa ilmoitukset tähän kohteeseen. Lisää Proxmoxin IP releen `MAIL_RELAY_NETWORKS`-listaan.
+- *Mikä tahansa muu sovellus:* sama SMTP-osoite ja portti. Releen kautta voi lähettää vain sallituista verkoista (`MAIL_RELAY_NETWORKS`) ja vain sallitulla lähettäjädomainilla.
+
+**Rajat ja tietosuoja.** Gmail-tilin päiväraja on noin 500 viestiä, mikä riittää pienelle ryhmälle moninkertaisesti. Viestit ovat tekstimuotoisia, ja otsikoista poistetaan rivinvaihdot (header-injektio). Viestissä näkyy kirjauksen sisältö (kirjan nimi, arvio, muistiinpanon alku) vain niille käyttäjille, jotka ovat muutenkin nähneet sen syötteessä. Vika-ajoissa katso `docker compose logs mail-relay` ja `docker compose logs kirjapaivakirja`.
+
 ## Ympäristömuuttujat
 
 | Muuttuja            | Oletus                          | Kuvaus                                                                                  |
@@ -132,4 +164,11 @@ Tietokannan uudet sarakkeet ja taulut lisätään käynnistyksessä itsestään;
 | `AUTH_USER_HEADER`  | `Remote-User`                   | Varanimi näyttönimelle                                                                  |
 | `BIND_ADDR`         | `0.0.0.0`                       | Vain docker-compose: osoite, johon portti 8097 sidotaan                                 |
 | `COVERS_DIR`        | `/app/data/covers`              | Kansikuvien tallennushakemisto (data-volumessa)         |
+| `MAIL_HOST`         | (ei asetettu)                   | SMTP-releen osoite. Jos tyhjä, sähköposti-ilmoitukset ovat pois päältä                  |
+| `MAIL_PORT`         | `587`                           | SMTP-portti                                                                             |
+| `MAIL_FROM`         | (pakollinen, jos `MAIL_HOST`)   | Lähettäjä, esim. `Kirjapäiväkirja <osoite@gmail.com>`                                    |
+| `MAIL_SECURITY`     | `none`                          | `none`, `starttls` tai `ssl` (rele kotiverkossa: `none`)                                |
+| `MAIL_USER`, `MAIL_PASSWORD` | (tyhjä)                | SMTP-tunnukset, jos palvelin vaatii (rele ei vaadi)                                     |
+| `PUBLIC_URL`        | (tyhjä)                         | Sovelluksen osoite linkkejä varten, esim. `https://example.dy.fi/kp/`                    |
+| `LIKE_DELAY_MINUTES`| `10`                            | Kuinka kauan peukkuilmoitusta viivästetään niputtamista varten                          |
 | `HTTP_USER_AGENT`   | `Kirjapaivakirja/1.0 (+https://github.com/eerorossi/Kirjapaivakirja)` | User-Agent ulkoisille pyynnöille. Open Library ja Wikipedia pyytävät tunnistettavaa agenttia; älä laita siihen muiden käyttäjien tietoja |
