@@ -17,7 +17,7 @@ import threading
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from email.message import EmailMessage
-from email.utils import formatdate, make_msgid, parseaddr
+from email.utils import formataddr, formatdate, make_msgid, parseaddr
 
 from store import NOTIFY_COLUMNS, Store
 
@@ -27,6 +27,22 @@ log = logging.getLogger(__name__)
 BACKOFF_MINUTES = (1, 5, 15, 60, 240, 720)
 KEEP_HANDLED_DAYS = 30
 POLL_SECONDS = 20
+
+
+_ADDRESS_RE = re.compile(r"^[^@\s<>\"]+@[^@\s<>\"]+\.[^@\s<>\"]+$")
+
+
+def parse_sender(raw: str, default_name: str = "Kirjapäiväkirja") -> str:
+    """Muodosta kelvollinen From-arvo. Hyväksyy pelkän osoitteen (`info@example.com`) tai
+    muodon `Nimi <info@example.com>`; kaikki muu (esim. kulmasulkeet unohtuneet) hylätään,
+    koska nimi ja osoite sulautuisivat muuten yhdeksi rikkinäiseksi osoitteeksi."""
+    name, address = parseaddr(raw.strip())
+    if not _ADDRESS_RE.match(address):
+        raise ValueError(
+            f"MAIL_FROM ei ole kelvollinen sähköpostiosoite: {raw!r}. "
+            "Käytä muotoa info@example.com tai Nimi <info@example.com> (kulmasulkeet kuuluvat muotoon)."
+        )
+    return formataddr((name or default_name, address))
 
 
 @dataclass
@@ -40,15 +56,21 @@ class MailConfig:
     public_url: str = ""    # esim. https://esimerkki.fi/kp/ (linkit viesteissä)
     like_delay_minutes: int = 10
 
+    @property
+    def address(self) -> str:
+        """Pelkkä lähettäjän osoite (SMTP:n kuoren MAIL FROM)."""
+        return parseaddr(self.sender)[1]
+
     @classmethod
     def from_env(cls) -> "MailConfig | None":
         """None, jos MAIL_HOST puuttuu: ilmoitukset ovat silloin pois päältä."""
         host = os.getenv("MAIL_HOST", "").strip()
         if not host:
             return None
-        sender = os.getenv("MAIL_FROM", "").strip()
-        if not sender:
-            raise ValueError("MAIL_FROM puuttuu: aseta lähettäjän osoite, esim. 'Kirjapäiväkirja <osoite@esimerkki.fi>'")
+        raw_sender = os.getenv("MAIL_FROM", "").strip()
+        if not raw_sender:
+            raise ValueError("MAIL_FROM puuttuu: aseta lähettäjän osoite, esim. info@esimerkki.fi")
+        sender = parse_sender(raw_sender, os.getenv("MAIL_FROM_NAME", "Kirjapäiväkirja").strip() or "Kirjapäiväkirja")
         security = os.getenv("MAIL_SECURITY", "none").strip().lower()
         if security not in ("none", "starttls", "ssl"):
             raise ValueError("MAIL_SECURITY pitää olla none, starttls tai ssl")
@@ -98,7 +120,7 @@ class SmtpMailer:
                 server.ehlo()
             if cfg.user:
                 server.login(cfg.user, cfg.password)
-            server.send_message(message)
+            server.send_message(message, from_addr=cfg.address)  # kuoren lähettäjä = pelkkä osoite
 
 
 # --- viestien sisältö -------------------------------------------------------

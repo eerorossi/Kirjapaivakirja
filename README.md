@@ -166,7 +166,8 @@ Proxmox          ─┘
 | `COVERS_DIR`        | `/app/data/covers`              | Kansikuvien tallennushakemisto (data-volumessa)         |
 | `MAIL_HOST`         | (ei asetettu)                   | SMTP-releen osoite. Jos tyhjä, sähköposti-ilmoitukset ovat pois päältä                  |
 | `MAIL_PORT`         | `587`                           | SMTP-portti                                                                             |
-| `MAIL_FROM`         | (pakollinen, jos `MAIL_HOST`)   | Lähettäjä, esim. `Kirjapäiväkirja <osoite@gmail.com>`                                    |
+| `MAIL_FROM`         | (pakollinen, jos `MAIL_HOST`)   | Lähettäjän osoite, esim. `osoite@gmail.com` (myös muoto `Nimi <osoite@gmail.com>` käy)  |
+| `MAIL_FROM_NAME`    | `Kirjapäiväkirja`               | Lähettäjän nimi viesteissä, jos `MAIL_FROM` on pelkkä osoite                            |
 | `MAIL_SECURITY`     | `none`                          | `none`, `starttls` tai `ssl` (rele kotiverkossa: `none`)                                |
 | `MAIL_USER`, `MAIL_PASSWORD` | (tyhjä)                | SMTP-tunnukset, jos palvelin vaatii (rele ei vaadi)                                     |
 | `PUBLIC_URL`        | (tyhjä)                         | Sovelluksen osoite linkkejä varten, esim. `https://example.dy.fi/kp/`                    |

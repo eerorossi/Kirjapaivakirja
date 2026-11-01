@@ -5,10 +5,18 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 import notifier
+from email.header import decode_header, make_header
+from email.utils import parseaddr
 from notifier import MailConfig, SmtpMailer, build_message, one_line, process_due
 
 NOW = datetime(2026, 11, 1, 12, 0, tzinfo=timezone.utc)
 CONFIG = MailConfig(host="rele", sender="Kirjapäiväkirja <ilmoitukset@example.com>", public_url="https://x.example/kp/")
+
+
+def display(sender: str) -> tuple[str, str]:
+    """(näkyvä nimi purettuna, osoite) From-arvosta."""
+    name, address = parseaddr(sender)
+    return str(make_header(decode_header(name))), address
 
 
 class FakeMailer:
@@ -229,7 +237,7 @@ def test_smtp_mailer_builds_utf8_message_and_sends(monkeypatch):
         def login(self, user, password):
             calls.append(("login", user, password))
 
-        def send_message(self, message):
+        def send_message(self, message, from_addr=None):
             calls.append(("send", message["To"], message["Subject"], message.get_content()))
 
     monkeypatch.setattr(notifier.smtplib, "SMTP", FakeSMTP)
@@ -243,6 +251,43 @@ def test_smtp_mailer_builds_utf8_message_and_sends(monkeypatch):
     assert message["Auto-Submitted"] == "auto-generated" and message["Message-ID"].endswith("@example.com>")
 
 
+def test_parse_sender_accepts_plain_address_and_named_form():
+    assert display(notifier.parse_sender("info@example.com")) == ("Kirjapäiväkirja", "info@example.com")
+    assert display(notifier.parse_sender("Kirjapäiväkirja <info@example.com>")) == ("Kirjapäiväkirja", "info@example.com")
+    assert notifier.parse_sender("Lukupiiri <info@example.com>") == "Lukupiiri <info@example.com>"
+    assert display(notifier.parse_sender("info@example.com", "Äänekoski")) == ("Äänekoski", "info@example.com")
+
+
+@pytest.mark.parametrize("raw", [
+    "Kirjapäiväkirja info.rossinen@gmail.com",   # kulmasulkeet unohtuneet: nimi ja osoite sulautuisivat
+    "info.rossinen",
+    "<>",
+    "a@b",
+    "x@y.fi, z@y.fi",
+])
+def test_parse_sender_rejects_malformed_values(raw):
+    with pytest.raises(ValueError):
+        notifier.parse_sender(raw)
+
+
+def test_smtp_mailer_uses_plain_address_as_envelope_sender(monkeypatch):
+    seen = {}
+
+    class FakeSMTP:
+        def __init__(self, *a, **k): pass
+        def __enter__(self): return self
+        def __exit__(self, *e): return False
+        def ehlo(self): pass
+        def send_message(self, message, from_addr=None, **kw):
+            seen["from_addr"], seen["header"] = from_addr, message["From"]
+
+    monkeypatch.setattr(notifier.smtplib, "SMTP", FakeSMTP)
+    config = MailConfig(host="h", sender=notifier.parse_sender("info@example.com"))
+    SmtpMailer(config).send("b@example.com", "x", "y")
+    assert seen["from_addr"] == "info@example.com"
+    assert display(seen["header"]) == ("Kirjapäiväkirja", "info@example.com")
+
+
 def test_config_from_env(monkeypatch):
     for name in ("MAIL_HOST", "MAIL_FROM", "MAIL_PORT", "MAIL_SECURITY", "PUBLIC_URL"):
         monkeypatch.delenv(name, raising=False)
@@ -250,10 +295,14 @@ def test_config_from_env(monkeypatch):
     monkeypatch.setenv("MAIL_HOST", "mail-relay")
     with pytest.raises(ValueError):
         MailConfig.from_env()  # MAIL_FROM puuttuu
+    monkeypatch.setenv("MAIL_FROM", "Kirjapäiväkirja a@example.com")  # kulmasulkeet puuttuvat
+    with pytest.raises(ValueError):
+        MailConfig.from_env()
     monkeypatch.setenv("MAIL_FROM", "a@example.com")
     monkeypatch.setenv("PUBLIC_URL", "https://x.example/kp")
     config = MailConfig.from_env()
     assert (config.host, config.port, config.security, config.public_url) == ("mail-relay", 587, "none", "https://x.example/kp/")
+    assert display(config.sender) == ("Kirjapäiväkirja", "a@example.com") and config.address == "a@example.com"
     monkeypatch.setenv("MAIL_SECURITY", "väärä")
     with pytest.raises(ValueError):
         MailConfig.from_env()
